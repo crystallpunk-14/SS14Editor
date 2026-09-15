@@ -9,7 +9,7 @@
  * module never walks the YAML tree itself. From that context it decides which of
  * six lists the caret is asking for:
  *
- *   1. component names   — on the `type:` value slot of a `components:` entry;
+ *   1. component names   — on the `type:` value slot of a component-registry entry;
  *   2. component fields  — on a key inside a component block;
  *   3. DataDefinition fields — on a key inside a nested `[DataDefinition]` value;
  *   4. prototype fields  — on a key at the top level of the prototype, keyed by
@@ -24,6 +24,21 @@
  * ({@link CursorContext.containerKeys}). The schema keys prototypes by their
  * YAML `type:` string and components by their registration name, which is what
  * the cursor context hands us.
+ *
+ * ## Where a component can be
+ *
+ * A `ComponentRegistry` is an ordinary field type, so (1) and (2) are not tied
+ * to `components:` on the prototype. A registry is equally legal on a component
+ * (`ComponentToggler.removeComponents`), inside a nested `[DataDefinition]`
+ * (`SlotDefinition.dependsOnComponents`) or inside a `!type:` union member
+ * (`!type:AddComponentSpecial` on `job.special`) — at any depth, through lists
+ * and dictionaries. So this module answers the walk's registry question from the
+ * schema ({@link contextAt}) instead of naming registry keys up front, and the
+ * chain the context reports is counted from the innermost component.
+ *
+ * The same walk carries the `!type:` tag of each step, because a tagged value is
+ * the one place the declared type is not the whole answer: the field declares an
+ * abstract base and only the tag names the member whose fields to offer.
  *
  * ## Mid-edit recovery
  *
@@ -190,25 +205,21 @@ function resolveCursor(text: string, offset: number, schema: SchemaRoot): Resolv
 }
 
 /**
- * Read the cursor context with this prototype's real component-registry fields.
+ * Read the cursor context, answering the walk's "is this field a component
+ * registry?" from the schema.
  *
- * `ComponentRegistry` is an ordinary field type, not a structural feature:
- * `entity` happens to call its registry `components`, but `borgType` calls one
- * `addComponents` and `antagSpecifier` declares two. So the key set comes from
- * the schema (`fieldKind === 'componentRegistry'`), never from the name. The
- * first read only supplies the prototype's `type:`, which is what selects the
- * key set for the second; both read the same parsed tree, so it costs no parse.
+ * `ComponentRegistry` is an ordinary field type, not a structural feature of the
+ * document: `entity` happens to call its registry `components`, but `borgType`
+ * calls one `addComponents`, `antagSpecifier` declares two, and a registry is
+ * just as legal on a component (`ComponentToggler.removeComponents`) or inside a
+ * nested `[DataDefinition]` (`SlotDefinition.dependsOnComponents`) at any depth.
+ * So the answer is the declared `fieldKind` of whatever field the chain lands
+ * on — the same lookup the field candidates use, never a name match.
  */
 function contextAt(file: PrototypeFile, offset: number, schema: SchemaRoot): CursorContext {
-  const first = cursorContextAt(file, offset);
-  const prototype = first.prototypeType === null ? undefined : schema.prototypes[first.prototypeType];
-  if (!prototype) return first;
-
-  const componentRegistryKeys = prototype.fields
-    .filter((field) => field.fieldKind === COMPONENT_REGISTRY_KIND)
-    .map((field) => field.tag);
-
-  return cursorContextAt(file, offset, { componentRegistryKeys });
+  return cursorContextAt(file, offset, {
+    isComponentRegistry: (site) => fieldAt(site, schema)?.fieldKind === COMPONENT_REGISTRY_KIND,
+  });
 }
 
 /** `FieldMetadata.fieldKind` the CLI emits for a `ComponentRegistry`-typed field. */
@@ -370,7 +381,7 @@ function fieldKeyCandidates(
   const caretKey = ctx.fieldPath[ctx.fieldPath.length - 1];
   const alreadyPresent = new Set(ctx.containerKeys.filter((key) => key !== caretKey));
 
-  return container.fields
+  return container
     .filter((field) => !alreadyPresent.has(field.tag))
     .map((field) => ({
       label: field.tag,
@@ -395,11 +406,7 @@ function fieldKeyCandidates(
  * which this document does not carry, so those stay empty.
  */
 function valueCandidates(ctx: CursorContext, schema: SchemaRoot): CompletionCandidate[] {
-  const container = containerFields(ctx, schema);
-  if (!container || ctx.fieldPath.length === 0) return [];
-
-  const leafKey = ctx.fieldPath[ctx.fieldPath.length - 1];
-  const field = container.fields.find((candidate) => candidate.tag === leafKey);
+  const field = fieldAt(ctx, schema);
   if (!field) return [];
 
   const { values, detail } = valueChoicesOf(field, schema);
@@ -440,6 +447,28 @@ function valueChoicesOf(
 // ---------------------------------------------------------------------------
 
 /**
+ * One field, addressed the way the cursor context reports it: from the innermost
+ * component when the caret is inside one, from the prototype map otherwise.
+ * {@link CursorContext} and the walk's registry probe both satisfy it, so the
+ * chain is resolved by one function for both.
+ */
+interface FieldRef {
+  readonly component: string | null;
+  readonly prototypeType: string | null;
+  readonly fieldPath: readonly string[];
+  readonly fieldTags: readonly (string | null)[];
+}
+
+/** Metadata of the field `ref`'s last key names, or `null` when the chain does not resolve. */
+function fieldAt(ref: FieldRef, schema: SchemaRoot): FieldMetadata | null {
+  const container = containerFields(ref, schema);
+  if (!container || ref.fieldPath.length === 0) return null;
+
+  const leafKey = ref.fieldPath[ref.fieldPath.length - 1];
+  return container.find((candidate) => candidate.tag === leafKey) ?? null;
+}
+
+/**
  * The field list the caret's key chain lands in: a component's own fields, a
  * prototype's `[Prototype]`-type fields, or — for a deeper chain — the fields of
  * the `[DataDefinition]` each step's key is typed as. `null` when the schema
@@ -447,46 +476,53 @@ function valueChoicesOf(
  * DataDefinition-typed field (a plain scalar, list or dictionary has no fixed
  * sub-fields to complete).
  */
-function containerFields(
-  ctx: CursorContext,
-  schema: SchemaRoot,
-): { fields: readonly FieldMetadata[] } | null {
-  const rootFields = rootFieldsFor(ctx, schema);
-  if (!rootFields) return null;
+function containerFields(ref: FieldRef, schema: SchemaRoot): readonly FieldMetadata[] | null {
+  let fields = rootFieldsFor(ref, schema);
+  if (!fields) return null;
 
   // fieldPath ends with the (possibly partial) key under the caret; the keys
   // before it name the container chain to walk into.
-  let fields = rootFields;
-  for (const key of ctx.fieldPath.slice(0, -1)) {
-    const field = fields.find((candidate) => candidate.tag === key);
+  for (let step = 0; step < ref.fieldPath.length - 1; step++) {
+    const field = fields.find((candidate) => candidate.tag === ref.fieldPath[step]);
     if (!field) return null;
-    const definition = dataDefinitionOf(field, schema);
+    const definition = definitionOf(field, ref.fieldTags[step] ?? null, schema);
     if (!definition) return null;
     fields = definition.fields;
   }
-  return { fields };
+  return fields;
 }
 
 /**
- * The field list the caret's container chain starts from: a component's fields
- * when inside `components:`, otherwise the prototype's fields keyed by its
- * `type:`. `null` when the schema does not know that component / prototype type.
+ * The field list the caret's container chain starts from: the innermost
+ * component's fields when the caret is inside a component registry, otherwise
+ * the prototype's fields keyed by its `type:`. `null` when the schema does not
+ * know that component / prototype type.
  */
-function rootFieldsFor(ctx: CursorContext, schema: SchemaRoot): readonly FieldMetadata[] | null {
-  if (ctx.component !== null) {
-    return schema.components[ctx.component]?.fields ?? null;
+function rootFieldsFor(ref: FieldRef, schema: SchemaRoot): readonly FieldMetadata[] | null {
+  if (ref.component !== null) {
+    return schema.components[ref.component]?.fields ?? null;
   }
-  if (ctx.prototypeType !== null) {
-    return schema.prototypes[ctx.prototypeType]?.fields ?? null;
+  if (ref.prototypeType !== null) {
+    return schema.prototypes[ref.prototypeType]?.fields ?? null;
   }
   return null;
 }
 
 /**
- * The `[DataDefinition]` a field (or its list element / dictionary value) is
- * typed as, resolved against `schema.dataDefinitions` by full type name.
+ * The `[DataDefinition]` one step of a key chain descends into: what the field
+ * (or its list element / dictionary value) is declared as — or, when the YAML
+ * node carries a `!type:` tag, the concrete member of the union that tag names.
+ * The declared type stays the fallback: it is the abstract base, whose fields
+ * are the part every member shares.
  */
-function dataDefinitionOf(field: FieldMetadata, schema: SchemaRoot): DataDefinitionMetadata | null {
+function definitionOf(
+  field: FieldMetadata,
+  tag: string | null,
+  schema: SchemaRoot,
+): DataDefinitionMetadata | null {
+  const tagged = tag ? taggedDefinition(tag, declaredTypeName(field), schema) : null;
+  if (tagged) return tagged;
+
   const typeName =
     dataDefinitionTypeName(field) ??
     dataDefinitionTypeName(field.element) ??
@@ -500,6 +536,58 @@ function dataDefinitionTypeName(
 ): string | undefined {
   if (!node) return undefined;
   return node.isDataDefinition && node.dataDefinitionType ? node.dataDefinitionType : undefined;
+}
+
+/** Full type name declared at this step — the union a `!type:` tag is scoped to. */
+function declaredTypeName(field: FieldMetadata): string | undefined {
+  return field.element?.fullType ?? field.value?.fullType ?? field.fullType;
+}
+
+/** `!type:Foo` — how the engine writes "this member of the union" in YAML. */
+const TYPE_TAG = /^!type:(.+)$/;
+
+/**
+ * The definition a `!type:` tag names. Resolved among the polymorphic members of
+ * the declared base first, because bare class names repeat across assemblies
+ * (`ThrusterComponent` is two types, Server and Client) and the union the field
+ * declares is what tells them apart. Only a base the schema carries no members
+ * for falls back to the global by-name index.
+ */
+function taggedDefinition(
+  tag: string,
+  baseType: string | undefined,
+  schema: SchemaRoot,
+): DataDefinitionMetadata | null {
+  const name = TYPE_TAG.exec(tag)?.[1];
+  if (!name) return null;
+
+  const members = baseType ? schema.polymorphicTypes[baseType] : undefined;
+  const member = members?.find((candidate) => shortTypeName(candidate) === name);
+  if (member && schema.dataDefinitions[member]) return schema.dataDefinitions[member];
+
+  return definitionsByShortName(schema).get(name) ?? null;
+}
+
+/**
+ * Definitions indexed by bare class name, for the tags the union lookup misses.
+ * A name carried by more than one type indexes to `null`: an ambiguous tag
+ * resolves to nothing rather than to the wrong type's fields. Built once per
+ * schema — there are ~7k definitions — and kept beside it, not in a module-level
+ * cache that would outlive a reloaded schema.
+ */
+const definitionIndexes = new WeakMap<SchemaRoot, Map<string, DataDefinitionMetadata | null>>();
+
+function definitionsByShortName(schema: SchemaRoot): Map<string, DataDefinitionMetadata | null> {
+  const cached = definitionIndexes.get(schema);
+  if (cached) return cached;
+
+  const index = new Map<string, DataDefinitionMetadata | null>();
+  for (const [fullName, definition] of Object.entries(schema.dataDefinitions)) {
+    const shortName = definition.shortName || shortTypeName(fullName);
+    index.set(shortName, index.has(shortName) ? null : definition);
+  }
+  definitionIndexes.set(schema, index);
+  return index;
 }
 
 function fieldDetail(field: FieldMetadata): string {

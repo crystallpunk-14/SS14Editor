@@ -475,3 +475,150 @@ describe('completionsAt — nothing to offer', () => {
     expect(completionsAt(file.text, offset, nakedSchema)).toEqual([]);
   });
 });
+/**
+ * A `ComponentRegistry` is a field type, so it sits wherever a field can — not
+ * only as `components:` on the prototype. The caret inside any of them is inside
+ * a component and completes against that component, however deep the registry
+ * was reached (issue #27 follow-up: the first cut only looked at prototype-level
+ * keys, so `conversionComponents:` on a component completed nothing).
+ */
+describe('completionsAt — registries nested below the prototype', () => {
+  const file = parsedFixture('nested_registries.yml');
+
+  /** Caret just after `prefix`, which must occur exactly once in the fixture. */
+  function caretAfter(prefix: string): number {
+    const at = file.text.indexOf(prefix);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(file.text.indexOf(prefix, at + 1)).toBe(-1);
+    return at + prefix.length;
+  }
+
+  describe('a registry declared by a component', () => {
+    it('offers component names inside it', () => {
+      const candidates = completionsAt(file.text, caretAfter('    - type: Spr'), SCHEMA);
+
+      expect(candidates.map((c) => c.label)).toEqual(
+        expect.arrayContaining(['Sprite', 'MeleeWeapon']),
+      );
+      expect(candidates.every((c) => c.kind === 'component')).toBe(true);
+    });
+
+    it('offers the inner component\'s fields, not the outer one\'s', () => {
+      const found = labels(file, caretAfter('      spr'));
+
+      expect(found).toEqual(expect.arrayContaining(['sprite', 'color', 'layers']));
+      // ComponentToggler's own fields, and the entity's, are both out of scope.
+      expect(found).not.toContain('removeComponents');
+      expect(found).not.toContain('categories');
+    });
+
+    it('reads the second registry of the same component as one too', () => {
+      const candidates = completionsAt(file.text, caretAfter('    - type: T'), SCHEMA);
+      expect(candidates.every((c) => c.kind === 'component')).toBe(true);
+      expect(candidates.map((c) => c.label)).toContain('Tag');
+    });
+
+    it('still offers the outer component\'s own fields on the registry key itself', () => {
+      const found = labels(file, caretAfter('    removeCompon'));
+
+      expect(found).toEqual(expect.arrayContaining(['netsync', 'removeComponents']));
+      // Already written in this block.
+      expect(found).not.toContain('components');
+    });
+  });
+
+  describe('a registry inside a [DataDefinition] list', () => {
+    it('offers the definition\'s own fields on the list item', () => {
+      const found = labels(file, caretAfter('  - na'));
+
+      expect(found).toEqual(expect.arrayContaining(['slotTexture', 'slotFlags', 'stripTime']));
+      // Not inventoryTemplate's fields — the caret is inside a SlotDefinition.
+      expect(found).not.toContain('slots');
+    });
+
+    it('offers component names in the registry that definition declares', () => {
+      const candidates = completionsAt(file.text, caretAfter('    - type: It'), SCHEMA);
+
+      expect(candidates.every((c) => c.kind === 'component')).toBe(true);
+      expect(candidates.map((c) => c.label)).toEqual(expect.arrayContaining(['Item', 'Sprite']));
+    });
+
+    it('offers that component\'s fields', () => {
+      const found = labels(file, caretAfter('      si'));
+
+      expect(found).toEqual(expect.arrayContaining(['size', 'shape']));
+      expect(found).not.toContain('dependsOnComponents');
+    });
+  });
+
+  describe('a registry inside a `!type:` union member', () => {
+    it('offers the tagged member\'s fields, which the abstract base does not have', () => {
+      const found = labels(file, caretAfter('    removeExist'));
+
+      expect(found).toEqual(['removeExisting']); // `components` is already written
+      // Not the job prototype's fields — the caret is inside the union member.
+      expect(found).not.toContain('startingGear');
+    });
+
+    it('offers component names in the registry that member declares', () => {
+      const candidates = completionsAt(file.text, caretAfter('    - type: Mel'), SCHEMA);
+
+      expect(candidates.every((c) => c.kind === 'component')).toBe(true);
+      expect(candidates.map((c) => c.label)).toContain('MeleeWeapon');
+    });
+
+    it('offers that component\'s fields', () => {
+      const found = labels(file, caretAfter('      attackR'));
+
+      expect(found).toEqual(expect.arrayContaining(['attackRate', 'range', 'damage']));
+      expect(found).not.toContain('removeExisting');
+    });
+  });
+});
+
+/** The mid-edit recovery has to reach a nested registry just as it reaches `components:`. */
+describe.each([
+  ['LF', '\n'],
+  ['CRLF', '\r\n'],
+])('completionsAt — mid-edit inside a nested registry, %s', (_name, eol) => {
+  const toggler = [
+    '- type: entity',
+    '  id: X',
+    '  components:',
+    '  - type: ComponentToggler',
+    '    removeComponents:',
+    '    - type: Sprite',
+    '      sprite: a.rsi',
+  ];
+
+  /** `lines` joined with the EOL under test, caret at the end of the last one. */
+  function atEndOf(lines: readonly string[]): { text: string; offset: number } {
+    const joined = lines.join(eol);
+    return { text: joined + eol, offset: joined.length };
+  }
+
+  it('offers component names on a bare `- `, with the `type:` it still needs', () => {
+    const { text, offset } = atEndOf([...toggler, '    - ']);
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.every((c) => c.kind === 'component')).toBe(true);
+    expect(candidates.find((c) => c.label === 'Sprite')?.insertText).toBe('type: Sprite');
+  });
+
+  it('offers component names on an empty `- type: ` slot', () => {
+    const { text, offset } = atEndOf([...toggler, '    - type: ']);
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.map((c) => c.label)).toEqual(expect.arrayContaining(['Sprite', 'MeleeWeapon']));
+    expect(candidates.every((c) => c.kind === 'component')).toBe(true);
+  });
+
+  it('offers the inner component\'s fields on a half-typed key', () => {
+    const { text, offset } = atEndOf([...toggler, '      col']);
+
+    const candidates = completionsAt(text, offset, SCHEMA);
+    expect(candidates.map((c) => c.label)).toContain('color');
+    expect(candidates.map((c) => c.label)).not.toContain('sprite'); // already written
+    expect(candidates.every((c) => c.insertText === `${c.label}: `)).toBe(true);
+  });
+});

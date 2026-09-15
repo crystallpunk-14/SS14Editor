@@ -79,7 +79,9 @@ export type {
   ResolvedField,
   MissingField,
   CursorContext,
+  CursorContextOptions,
   CursorToken,
+  RegistrySite,
   SurgicalEdit,
   EditOutcome,
 } from './prototype-yaml';

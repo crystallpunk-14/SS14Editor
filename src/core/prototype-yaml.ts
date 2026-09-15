@@ -10,7 +10,9 @@
  *      container plus the missing key tail when the field is only inherited.
  *   2. offset -> context  ({@link cursorContextAt}): which prototype, component
  *      and field does an offset fall in, and is it on a key, a value, or the
- *      `type:` slot of a `components:` entry.
+ *      `type:` slot of a component-registry entry. Which sequence-valued fields
+ *      are registries is the caller's to say ({@link CursorContextOptions}) —
+ *      `ComponentRegistry` is a declared field type, and only a schema knows it.
  *   3. path -> surgical edit  ({@link replaceScalarValue}, {@link replaceBlockScalarValue},
  *      {@link insertField}, {@link insertComponent}, {@link deleteAt}): one
  *      `{ range, newText }` splice that lands the change without re-serialising
@@ -148,10 +150,28 @@ export interface CursorContext {
   readonly entityIndex: number | null;
   /** That prototype's top-level `type:` value (e.g. `entity`, `jobIcon`), or `null`. */
   readonly prototypeType: string | null;
-  /** Enclosing component's `type:` value when the offset is inside `components:`, else `null`. */
+  /**
+   * `type:` value of the innermost component the offset is inside, else `null`.
+   * Component registries nest (a component's own registry field holds components
+   * that may declare one in turn), and the innermost is what {@link fieldPath}
+   * is addressed from.
+   */
   readonly component: string | null;
-  /** Key chain to the field under the offset, including the field itself. Empty when on none. */
+  /**
+   * Key chain to the field under the offset, including the field itself, counted
+   * from {@link component} when the offset is inside one and from the prototype
+   * map otherwise. Sequence steps carry no key: every item of a sequence has the
+   * same declared type, so an index would add nothing a consumer can look up.
+   * Empty when on none.
+   */
   readonly fieldPath: readonly string[];
+  /**
+   * The `!type:` tag the walk descended through at each step, aligned 1:1 with
+   * {@link fieldPath} and `null` where the node carried none. A tag is what picks
+   * one concrete `[DataDefinition]` out of a union, so a consumer resolving the
+   * chain against a schema needs it alongside the keys.
+   */
+  readonly fieldTags: readonly (string | null)[];
   /**
    * Keys already written in the block map the offset sits in — the map that
    * directly holds `fieldPath`'s last key, or the innermost map the offset is
@@ -417,24 +437,12 @@ export function resolveField(file: PrototypeFile, address: FieldAddress): FieldR
 // offset -> context
 // ---------------------------------------------------------------------------
 
-/** The registry-keyed sequence `offset` falls in, if any, and the key naming it. */
-function findComponentRegistry(
-  entity: YAMLMap,
-  offset: number,
-  registryKeys: readonly string[],
-): { readonly key: string; readonly seq: YAMLSeq } | null {
-  for (const key of registryKeys) {
-    const value = findPair(entity, key)?.value ?? null;
-    if (isSeq(value) && spans(value, offset)) return { key, seq: value };
-  }
-  return null;
-}
-
 const NOWHERE: CursorContext = {
   entityIndex: null,
   prototypeType: null,
   component: null,
   fieldPath: [],
+  fieldTags: [],
   containerKeys: [],
   token: { kind: 'none' },
 };
@@ -460,21 +468,90 @@ function onComponentTypeSlot(typePair: Pair, offset: number, text: string): bool
   return offset <= (newline === -1 ? text.length : newline);
 }
 
-interface DescendResult {
-  chain: string[];
-  token: CursorToken;
-  node: Node | null;
-  /** Keys of the innermost block map `offset` is inside — see {@link CursorContext.containerKeys}. */
-  containerKeys: string[];
+/**
+ * One sequence-valued field met on the way down to the caret, put to
+ * {@link CursorContextOptions.isComponentRegistry}. Its shape is a plain field
+ * reference, so a caller can answer with the same chain walk it uses for
+ * everything else.
+ */
+export interface RegistrySite {
+  readonly prototypeType: string | null;
+  /** Innermost component the field sits in, or `null` when it is on the prototype map. */
+  readonly component: string | null;
+  /** Key chain from that root down to the field, the field's own key last. */
+  readonly fieldPath: readonly string[];
+  /** `!type:` tag descended through at each step, aligned with {@link fieldPath}. */
+  readonly fieldTags: readonly (string | null)[];
+}
+
+export interface CursorContextOptions {
+  /**
+   * Whether the sequence-valued field at `site` is a `ComponentRegistry` — a list
+   * of `- type: X` component blocks whose contents are addressed from the
+   * component, not from the prototype.
+   *
+   * `ComponentRegistry` is an ordinary field type, not a structural feature of
+   * the document, so only a caller holding the schema can tell one apart. The
+   * engine has ~70 of them and they sit at every depth: on prototypes
+   * (`entity.components`, `borgType.addComponents`), on components themselves
+   * (`ComponentToggler.removeComponents`) and inside nested `[DataDefinition]`s
+   * (`SlotDefinition.dependsOnComponents`). Defaults to the prototype's own
+   * `components:`, the one case a schema-free caller can name.
+   */
+  readonly isComponentRegistry?: (site: RegistrySite) => boolean;
+}
+
+/** The only registry a schema-free caller gets: `components:` on the prototype map. */
+function isDefaultRegistry(site: RegistrySite): boolean {
+  return site.component === null && site.fieldPath.length === 1 && site.fieldPath[0] === 'components';
+}
+
+/** Everything the walk needs that does not change as it descends. */
+interface Walk {
+  readonly offset: number;
+  readonly text: string;
+  readonly prototypeType: string | null;
+  readonly isRegistry: (site: RegistrySite) => boolean;
 }
 
 /**
- * Find the field in `map` whose line/block `offset` sits on, building the key
- * chain. Each pair owns the text from its key start up to the next key (or the
- * map's end), so an offset in the `key: ` gap or past a `key:` with no value
- * still lands on that field as a `value` token — the point completion fires.
+ * Where the walk stands: the component root it is under (`null` on the prototype
+ * map) and the key chain plus tags collected since that root. Crossing into a
+ * component registry starts a fresh frame.
  */
-function descend(map: YAMLMap, offset: number): DescendResult {
+interface Frame {
+  readonly component: string | null;
+  readonly chain: readonly string[];
+  readonly tags: readonly (string | null)[];
+}
+
+const ROOT_FRAME: Frame = { component: null, chain: [], tags: [] };
+
+/** What the walk landed on. `null` from any step means "the offset is not on anything here". */
+interface Landing {
+  readonly component: string | null;
+  readonly fieldPath: readonly string[];
+  readonly fieldTags: readonly (string | null)[];
+  readonly containerKeys: readonly string[];
+  readonly token: CursorToken;
+  readonly node: Node | null;
+}
+
+/** A verbatim `!type:` tag carried by a node, or `null`. */
+function tagOf(node: Node | null | undefined): string | null {
+  const tag = (node as { tag?: unknown } | null | undefined)?.tag;
+  return typeof tag === 'string' && tag.startsWith('!') ? tag : null;
+}
+
+/**
+ * Find the pair in `map` whose line/block `offset` sits on, then keep walking
+ * into its value. Each pair owns the text from its key start up to the next key
+ * (or the map's end), so an offset in the `key: ` gap or past a `key:` with no
+ * value still lands on that field as a `value` token — the point completion
+ * fires. A value the walk cannot enter (a scalar, or a container the offset is
+ * not actually inside) falls back to that same `value` token.
+ */
+function walkMap(map: YAMLMap, frame: Frame, walk: Walk): Landing | null {
   const items = map.items;
   const mapEnd = map.range?.[2] ?? Number.MAX_SAFE_INTEGER;
   const containerKeys = keysOf(map);
@@ -487,54 +564,93 @@ function descend(map: YAMLMap, offset: number): DescendResult {
 
     const nextKeyStart =
       i + 1 < items.length ? (items[i + 1].key as Node | null)?.range?.[0] ?? mapEnd : mapEnd;
-    if (offset < keyRange[0] || offset >= nextKeyStart) continue;
-
-    if (offset <= keyRange[1]) {
-      return {
-        chain: [keyName],
-        token: { kind: 'key', name: keyName },
-        node: (pair.value as Node | undefined) ?? null,
-        containerKeys,
-      };
-    }
+    if (walk.offset < keyRange[0] || walk.offset >= nextKeyStart) continue;
 
     const value = (pair.value as Node | undefined) ?? null;
-    if (isMap(value) && spans(value, offset)) {
-      const sub = descend(value, offset);
-      if (sub.token.kind !== 'none') {
-        sub.chain.unshift(keyName);
-        return sub;
-      }
-    }
-    return { chain: [keyName], token: { kind: 'value' }, node: value, containerKeys };
+    const here: Frame = {
+      component: frame.component,
+      chain: [...frame.chain, keyName],
+      tags: [...frame.tags, tagOf(value)],
+    };
+    const landed = (token: CursorToken): Landing => ({
+      component: frame.component,
+      fieldPath: here.chain,
+      fieldTags: here.tags,
+      containerKeys,
+      token,
+      node: value,
+    });
+
+    if (walk.offset <= keyRange[1]) return landed({ kind: 'key', name: keyName });
+    return walkValue(value, here, walk) ?? landed({ kind: 'value' });
   }
-  return { chain: [], token: { kind: 'none' }, node: null, containerKeys };
+  return null;
+}
+
+/** Walk into a pair's value: a nested map, a component registry, or a plain sequence. */
+function walkValue(value: Node | null, frame: Frame, walk: Walk): Landing | null {
+  if (!value || !spans(value, walk.offset)) return null;
+  if (isMap(value)) return walkMap(value, frame, walk);
+  if (!isSeq(value)) return null;
+
+  const site: RegistrySite = {
+    prototypeType: walk.prototypeType,
+    component: frame.component,
+    fieldPath: frame.chain,
+    fieldTags: frame.tags,
+  };
+  return walk.isRegistry(site) ? walkRegistry(value, walk) : walkSeq(value, frame, walk);
 }
 
 /**
- * The registry key assumed when the caller names none. `components` is only the
- * commonest `ComponentRegistry`-typed field, not a privileged one — the engine
- * has ten (`addComponents` on `borgType`, `mindComponents` on `antagSpecifier`,
- * …) and a prototype may declare several. A caller holding the schema should
- * pass the real set; this default just keeps the schema-free callers working.
+ * A plain sequence. Its items all share the field's declared element type, so an
+ * index carries nothing a schema lookup could use and never enters the key
+ * chain. A `!type:` tag on the item does carry something — it names the concrete
+ * member of a union — so it replaces the (untagged) sequence's own entry in the
+ * tag chain.
  */
-const DEFAULT_COMPONENT_REGISTRY_KEYS: readonly string[] = ['components'];
+function walkSeq(seq: YAMLSeq, frame: Frame, walk: Walk): Landing | null {
+  const item = seq.items.find((candidate) => spans(candidate, walk.offset)) as Node | undefined;
+  if (!item) return null;
 
-export interface CursorContextOptions {
-  /**
-   * Prototype-level keys whose value is a `ComponentRegistry` — a sequence of
-   * `- type: X` component blocks. Anything in this list is read as a component
-   * registry; everything else is walked as an ordinary field.
-   */
-  readonly componentRegistryKeys?: readonly string[];
+  const framed: Frame = { ...frame, tags: [...frame.tags.slice(0, -1), tagOf(item)] };
+  if (isMap(item)) return walkMap(item, framed, walk);
+  if (isSeq(item)) return walkSeq(item, framed, walk);
+  return null;
+}
+
+/**
+ * A `ComponentRegistry` sequence: every item is a `- type: X` block whose fields
+ * belong to that component, so the caret inside one is addressed from the
+ * component and the frame starts over.
+ */
+function walkRegistry(seq: YAMLSeq, walk: Walk): Landing | null {
+  const item = seq.items.find((candidate) => spans(candidate, walk.offset));
+  if (!isMap(item)) return null;
+
+  const typePair = findPair(item, 'type');
+  const component = typePair ? scalarString(typePair.value) ?? null : null;
+
+  if (typePair && onComponentTypeSlot(typePair, walk.offset, walk.text)) {
+    return {
+      component,
+      fieldPath: [],
+      fieldTags: [],
+      containerKeys: [],
+      token: { kind: 'component-type', text: component },
+      node: null,
+    };
+  }
+  return walkMap(item, { component, chain: [], tags: [] }, walk);
 }
 
 /**
  * Describe where `offset` sits: which prototype and (inside a component
- * registry) which component, the key chain to the field, and whether the caret
- * is on a key, a value, or the `type:` slot of a component entry — plus
- * alias/anchor marks on the value under it. Returns {@link NOWHERE} for an
- * offset outside every prototype.
+ * registry, at any depth) which component, the key chain to the field with the
+ * `!type:` tags it descended through, and whether the caret is on a key, a
+ * value, or the `type:` slot of a component entry — plus alias/anchor marks on
+ * the value under it. Returns {@link NOWHERE} for an offset outside every
+ * prototype.
  */
 export function cursorContextAt(
   file: PrototypeFile,
@@ -550,60 +666,33 @@ export function cursorContextAt(
   const entity = root.items[entityIndex];
   const prototypeType = isMap(entity) ? scalarString(mapGet(entity, 'type')) ?? null : null;
   const shell = { entityIndex, prototypeType };
-
-  if (!isMap(entity)) {
-    return { ...shell, component: null, fieldPath: [], containerKeys: [], token: { kind: 'none' } };
-  }
-
-  const registry = findComponentRegistry(
-    entity,
-    offset,
-    options?.componentRegistryKeys ?? DEFAULT_COMPONENT_REGISTRY_KEYS,
-  );
-  if (registry) {
-    const componentItem = registry.seq.items.find((item) => spans(item, offset));
-    if (!isMap(componentItem)) {
-      return {
-        ...shell,
-        component: null,
-        fieldPath: [registry.key],
-        containerKeys: [],
-        token: { kind: 'none' },
-      };
-    }
-
-    const typePair = findPair(componentItem, 'type');
-    const component = typePair ? scalarString(typePair.value) ?? null : null;
-
-    if (typePair && onComponentTypeSlot(typePair, offset, text)) {
-      return {
-        ...shell,
-        component,
-        fieldPath: [],
-        containerKeys: [],
-        token: { kind: 'component-type', text: component },
-      };
-    }
-
-    const inner = descend(componentItem, offset);
-    return {
-      ...shell,
-      component,
-      fieldPath: inner.chain,
-      containerKeys: inner.containerKeys,
-      token: inner.token,
-      ...refMarkers(inner.node),
-    };
-  }
-
-  const inner = descend(entity, offset);
-  return {
+  const nothingHere: CursorContext = {
     ...shell,
     component: null,
-    fieldPath: inner.chain,
-    containerKeys: inner.containerKeys,
-    token: inner.token,
-    ...refMarkers(inner.node),
+    fieldPath: [],
+    fieldTags: [],
+    containerKeys: [],
+    token: { kind: 'none' },
+  };
+
+  if (!isMap(entity)) return nothingHere;
+
+  const landing = walkMap(entity, ROOT_FRAME, {
+    offset,
+    text,
+    prototypeType,
+    isRegistry: options?.isComponentRegistry ?? isDefaultRegistry,
+  });
+  if (!landing) return nothingHere;
+
+  return {
+    ...shell,
+    component: landing.component,
+    fieldPath: landing.fieldPath,
+    fieldTags: landing.fieldTags,
+    containerKeys: landing.containerKeys,
+    token: landing.token,
+    ...refMarkers(landing.node),
   };
 }
 

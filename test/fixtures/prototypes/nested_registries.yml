@@ -1,0 +1,42 @@
+# Hand-built fixture for component registries that are not `components:` on the
+# prototype (issue #27 follow-up). Every prototype, component, field and
+# `!type:` member here is real in the crystall-edge schema snapshot
+# (schema-cli/fixtures/metadata.json), so the core tests can assert on concrete
+# candidate labels. No `- type:` or field line repeats, so a test can anchor an
+# offset with a plain indexOf.
+
+# Registries on a component: ComponentToggler declares two, and each holds
+# ordinary components with their own fields.
+- type: entity
+  id: TestNestedRegistry
+  components:
+  - type: ComponentToggler
+    components:
+    - type: Sprite
+      sprite: a.rsi
+    removeComponents:
+    - type: Tag
+      tags:
+      - TestTag
+
+# A registry two levels down a [DataDefinition] list:
+# inventoryTemplate.slots -> SlotDefinition.dependsOnComponents.
+- type: inventoryTemplate
+  id: TestInventory
+  slots:
+  - name: head
+    dependsOnComponents:
+    - type: Item
+      size: Small
+
+# A registry inside a !type: union member: job.special is a list of the abstract
+# JobSpecial, and only the tag says which member — AddComponentSpecial, whose
+# `components:` is the registry.
+- type: job
+  id: TestJob
+  special:
+  - !type:AddComponentSpecial
+    removeExisting: true
+    components:
+    - type: MeleeWeapon
+      attackRate: 1

@@ -134,3 +134,84 @@ describe('cursorContextAt — offset to context', () => {
     expect(pos.character).toBe(2);
   });
 });
+
+/**
+ * Which sequence-valued fields are component registries is the caller's to say:
+ * `ComponentRegistry` is a declared field type and this module holds no schema.
+ * Told nothing, the walk knows exactly one — `components:` on the prototype map.
+ */
+describe('cursorContextAt — nested containers and component registries', () => {
+  const nested = parsedFixture('nested_registries.yml');
+
+  /** Caret just after `prefix`, which occurs exactly once in the fixture. */
+  function caretAfter(prefix: string): number {
+    const at = nested.text.indexOf(prefix);
+    expect(nested.text.indexOf(prefix, at + 1)).toBe(-1);
+    return at + prefix.length;
+  }
+
+  /** Reads any field named `components` as a registry, wherever it sits. */
+  const anyComponentsKey = {
+    isComponentRegistry: (site: { fieldPath: readonly string[] }) =>
+      site.fieldPath[site.fieldPath.length - 1] === 'components',
+  };
+
+  it('walks into a list of maps, keeping the index out of the key chain', () => {
+    const ctx = cursorContextAt(nested, caretAfter('  - na'));
+
+    expect(ctx.prototypeType).toBe('inventoryTemplate');
+    expect(ctx.component).toBeNull();
+    expect(ctx.fieldPath).toEqual(['slots', 'name']);
+    expect(ctx.token).toEqual({ kind: 'key', name: 'name' });
+  });
+
+  it('reports the `!type:` tag of every step it descended through', () => {
+    const ctx = cursorContextAt(nested, caretAfter('    removeExist'));
+
+    expect(ctx.fieldPath).toEqual(['special', 'removeExisting']);
+    expect(ctx.fieldTags).toEqual(['!type:AddComponentSpecial', null]);
+  });
+
+  it('reads a registry it was not told about as an ordinary list of maps', () => {
+    const ctx = cursorContextAt(nested, caretAfter('      spr'));
+
+    expect(ctx.component).toBe('ComponentToggler');
+    expect(ctx.fieldPath).toEqual(['components', 'sprite']);
+  });
+
+  it('starts a fresh chain at the component a nested registry holds', () => {
+    const ctx = cursorContextAt(nested, caretAfter('      spr'), anyComponentsKey);
+
+    expect(ctx.component).toBe('Sprite');
+    expect(ctx.fieldPath).toEqual(['sprite']);
+    expect(ctx.fieldTags).toEqual([null]);
+    expect(ctx.containerKeys).toEqual(['type', 'sprite']);
+  });
+
+  it('reports the `type:` slot of a nested registry entry as the component-name point', () => {
+    const ctx = cursorContextAt(nested, caretAfter('    - type: Spr'), anyComponentsKey);
+
+    expect(ctx.component).toBe('Sprite');
+    expect(ctx.token).toEqual({ kind: 'component-type', text: 'Sprite' });
+  });
+
+  it('asks about each sequence on the way down, from the innermost component', () => {
+    const asked: unknown[] = [];
+    cursorContextAt(nested, caretAfter('      spr'), {
+      isComponentRegistry: (site) => {
+        asked.push(site);
+        return site.fieldPath[site.fieldPath.length - 1] === 'components';
+      },
+    });
+
+    expect(asked).toEqual([
+      { prototypeType: 'entity', component: null, fieldPath: ['components'], fieldTags: [null] },
+      {
+        prototypeType: 'entity',
+        component: 'ComponentToggler',
+        fieldPath: ['components'],
+        fieldTags: [null],
+      },
+    ]);
+  });
+});
