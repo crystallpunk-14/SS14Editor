@@ -27,6 +27,21 @@ import { isAlias, isMap, isScalar, isSeq, parseAllDocuments, type Document, type
 import type { NodeRange } from './prototype-yaml';
 
 // ---------------------------------------------------------------------------
+// Where prototypes live
+// ---------------------------------------------------------------------------
+
+/** Fork-relative prototype roots. Engine prototypes are read-only. */
+export const PROTOTYPE_ROOTS = [
+  { dir: 'Resources/Prototypes', engine: false },
+  { dir: 'RobustToolbox/Resources/EnginePrototypes', engine: true },
+] as const;
+
+/** The root a fork-relative, `/`-separated path falls under (the root itself included). */
+export function prototypeRootOf(relPath: string): (typeof PROTOTYPE_ROOTS)[number] | undefined {
+  return PROTOTYPE_ROOTS.find((root) => relPath === root.dir || relPath.startsWith(`${root.dir}/`));
+}
+
+// ---------------------------------------------------------------------------
 // Records
 // ---------------------------------------------------------------------------
 
@@ -70,15 +85,17 @@ function parentsOf(item: YAMLMap, doc: Document): string[] {
   if (isSeq(node)) {
     return node.items
       .map((p) => scalarString(p, doc))
-      .filter((p): p is string => p !== undefined);
+      .filter((p): p is string => p !== undefined && p !== '');
   }
   const single = scalarString(node, doc);
   return single === undefined || single === '' ? [] : [single];
 }
 
-function isAbstract(item: YAMLMap): boolean {
-  const value = (item.get('abstract', true) as { value?: unknown } | undefined)?.value;
-  return value === true || value === 'true';
+function isAbstract(item: YAMLMap, doc: Document): boolean {
+  const node = item.get('abstract', true);
+  const target = isAlias(node) ? node.resolve(doc) : node;
+  if (!isScalar(target)) return false;
+  return target.value === true || target.value === 'true';
 }
 
 /**
@@ -109,7 +126,7 @@ export function collectRecords(rawText: string, filePath: string, engine: boolea
         filePath,
         range: [start, valueEnd, nodeEnd],
         parents: parentsOf(item, doc),
-        abstract: isAbstract(item),
+        abstract: isAbstract(item, doc),
         engine,
       });
     }
@@ -365,4 +382,38 @@ export function parseIndexCache(
     ? doc.skippedFiles.filter((f): f is string => typeof f === 'string')
     : [];
   return { fingerprint: doc.fingerprint, records, skippedFiles };
+}
+
+// ---------------------------------------------------------------------------
+// Panel status
+// ---------------------------------------------------------------------------
+
+/**
+ * The index's progress or result, mirroring {@link import('./schema').SchemaStatus}:
+ * one `state` discriminant and a `message` on every variant for the panel to
+ * show verbatim.
+ */
+export type IndexStatus =
+  | { readonly state: 'building'; readonly message: string; readonly done: number; readonly total: number }
+  | { readonly state: 'ready'; readonly message: string; readonly count: number; readonly skippedFiles: number }
+  | { readonly state: 'failed'; readonly message: string };
+
+export function indexBuilding(done: number, total: number): IndexStatus {
+  return { state: 'building', done, total, message: `Indexing prototypes… ${done}/${total} files` };
+}
+
+export function indexReady(count: number, skippedFiles: number): IndexStatus {
+  return {
+    state: 'ready',
+    count,
+    skippedFiles,
+    message:
+      skippedFiles > 0
+        ? `Prototype index: ${count} prototypes (${skippedFiles} unparseable files skipped).`
+        : `Prototype index: ${count} prototypes.`,
+  };
+}
+
+export function indexFailed(reason: string): IndexStatus {
+  return { state: 'failed', message: `Prototype index failed: ${reason}` };
 }

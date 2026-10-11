@@ -7,13 +7,16 @@ import { stringify } from 'yaml';
 import {
   collectRecords,
   diffRecords,
+  indexBuilding,
+  indexFailed,
   indexFingerprint,
+  indexReady,
   parseIndexCache,
+  prototypeRootOf,
   PrototypeIndex,
   serializeIndexCache,
   type PrototypeRecord,
 } from '../../src/core/prototype-index';
-import { indexStatusMessage } from '../../src/core/index-status';
 import { fixtureText } from './prototype-fixtures';
 
 // ---------------------------------------------------------------------------
@@ -159,12 +162,17 @@ describe('collectRecords on real files', () => {
         '      boardPrototype: &BackgammonBoard BackgammonBoardTabletop',
         '- type: entity',
         '  id: *BackgammonBoard',
-        '  parent: [ *BackgammonBoard ]',
+        "  parent: [ *BackgammonBoard, '' ]",
         '',
       ].join('\n'),
     );
     expect(recs.map((r) => r.id)).toEqual(['BackgammonBoard', 'BackgammonBoardTabletop']);
     expect(recs[1].parents).toEqual(['BackgammonBoardTabletop']);
+  });
+
+  it('resolves an aliased abstract flag', () => {
+    const recs = collectOk('- type: Tag\n  id: A\n  abstract: &yes true\n- type: Tag\n  id: B\n  abstract: *yes\n');
+    expect(recs.map((r) => r.abstract)).toEqual([true, true]);
   });
 
   it('treats an empty parent as no parents', () => {
@@ -315,13 +323,21 @@ describe('index cache', () => {
   });
 });
 
-describe('indexStatusMessage', () => {
-  it('reports progress, the final count, and failures', () => {
-    expect(indexStatusMessage({ state: 'building', done: 10, total: 100 })).toBe('Indexing prototypes… 10/100 files');
-    expect(indexStatusMessage({ state: 'ready', count: 25200, skippedFiles: 0 })).toBe('Prototype index: 25200 prototypes.');
-    expect(indexStatusMessage({ state: 'ready', count: 3, skippedFiles: 2 })).toBe(
-      'Prototype index: 3 prototypes (2 unparseable files skipped).',
-    );
-    expect(indexStatusMessage({ state: 'failed', reason: 'boom' })).toBe('Prototype index failed: boom');
+describe('index status', () => {
+  it('carries a panel-ready message for progress, the final count, and failures', () => {
+    expect(indexBuilding(10, 100).message).toBe('Indexing prototypes… 10/100 files');
+    expect(indexReady(25200, 0).message).toBe('Prototype index: 25200 prototypes.');
+    expect(indexReady(3, 2).message).toBe('Prototype index: 3 prototypes (2 unparseable files skipped).');
+    expect(indexFailed('boom').message).toBe('Prototype index failed: boom');
+  });
+});
+
+describe('prototypeRootOf', () => {
+  it('maps content and engine paths to their root, and nothing else', () => {
+    expect(prototypeRootOf('Resources/Prototypes/a/b.yml')?.engine).toBe(false);
+    expect(prototypeRootOf('Resources/Prototypes')?.engine).toBe(false);
+    expect(prototypeRootOf('RobustToolbox/Resources/EnginePrototypes/x.yml')?.engine).toBe(true);
+    expect(prototypeRootOf('Resources/PrototypesOld/x.yml')).toBeUndefined();
+    expect(prototypeRootOf('Resources/Maps/x.yml')).toBeUndefined();
   });
 });

@@ -62,10 +62,19 @@ export {
   indexFingerprint,
   serializeIndexCache,
   parseIndexCache,
+  PROTOTYPE_ROOTS,
+  prototypeRootOf,
+  indexBuilding,
+  indexReady,
+  indexFailed,
 } from './prototype-index';
-export type { PrototypeRecord, CollectResult, RecordDiff, IndexLookup } from './prototype-index';
-export { indexStatusMessage } from './index-status';
-export type { IndexStatus } from './index-status';
+export type {
+  PrototypeRecord,
+  CollectResult,
+  RecordDiff,
+  IndexLookup,
+  IndexStatus,
+} from './prototype-index';
 
 export { completionsAt } from './completion';
 export type { CompletionCandidate } from './completion';

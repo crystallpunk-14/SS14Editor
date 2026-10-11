@@ -1,5 +1,4 @@
-import type { SchemaStatus } from '../core';
-import { indexStatusMessage, type IndexStatus } from '../core/index-status';
+import type { IndexStatus, SchemaStatus } from '../core';
 import type { ForkFolderStatus } from '../shared/protocol';
 
 /**
@@ -55,5 +54,5 @@ function statusText(state: ViewState): string {
 /** The prototype index's own line (issue #28), under the fork/schema line. */
 function indexText(state: ViewState): string | null {
   if (state.folder === null || !state.folder.status.recognized || state.index === null) return null;
-  return indexStatusMessage(state.index);
+  return state.index.message;
 }

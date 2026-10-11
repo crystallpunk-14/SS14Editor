@@ -5,6 +5,10 @@ import * as vscode from 'vscode';
 
 import {
   EXPECTED_SCHEMA_VERSION,
+  indexBuilding,
+  indexFailed,
+  indexReady,
+  PROTOTYPE_ROOTS,
   PrototypeIndex,
   schemaCacheDirName,
   type IndexStatus,
@@ -18,6 +22,14 @@ import type { FromWorker, ToWorker } from './prototype-index-worker';
 const UPDATE_DEBOUNCE_MS = 200;
 
 /**
+ * Everything under the prototype roots, not just `*.yml`: a deleted or renamed
+ * folder is reported once, by its own path, and the worker expands it.
+ */
+const WATCH_GLOB = `{${PROTOTYPE_ROOTS.map((root) => root.dir).join(',')}}/**`;
+
+type ForkRoot = NonNullable<ReturnType<ForkStatusController['recognizedRoot']>>;
+
+/**
  * Owns the prototype index (issue #28): every prototype of every kind in
  * `Resources/Prototypes/**` and the engine's `EnginePrototypes/**`.
  *
@@ -25,6 +37,9 @@ const UPDATE_DEBOUNCE_MS = 200;
  *     a cache hit at activation, a cold parse otherwise — so the Extension Host
  *     stays responsive; the panel shows progress, then the count.
  *   - Until the first load, {@link index} answers lookups with "not ready".
+ *   - The cache fingerprint takes `EXPECTED_SCHEMA_VERSION`: a loaded schema of
+ *     any other version is `incompatible` (issue #25), so the two never differ
+ *     while providers are up, and the index need not wait for the CLI.
  *   - On save (and create/delete) of a prototype file, the worker re-parses just
  *     that file and the index is patched in place; {@link onDidUpdate} carries
  *     the per-file diff. There is no "too many files -> full rebuild" threshold.
@@ -81,6 +96,7 @@ export class PrototypeIndexController implements vscode.Disposable {
   rebuild(): void {
     const root = this.forkStatus.recognizedRoot();
     if (root) this.start(root, true);
+    else this.log.appendLine('[index] rebuild skipped: the folder is not a recognised, built SS14 fork');
   }
 
   private onForkStatusChanged(): void {
@@ -93,7 +109,7 @@ export class PrototypeIndexController implements vscode.Disposable {
     if (root.uri.fsPath !== this.forkRoot) this.start(root, false);
   }
 
-  private start(root: { readonly name: string; readonly uri: vscode.Uri }, force: boolean): void {
+  private start(root: ForkRoot, force: boolean): void {
     this.stop();
     this.forkRoot = root.uri.fsPath;
 
@@ -112,21 +128,23 @@ export class PrototypeIndexController implements vscode.Disposable {
     worker.on('error', (err) => {
       if (this.worker !== worker) return;
       this.log.appendLine(`[index] worker crashed: ${err.stack ?? err.message}`);
-      this.setStatus({ state: 'failed', reason: err.message });
+      this.setStatus(indexFailed(err.message));
+    });
+    worker.on('exit', (code) => {
+      // stop() clears `this.worker` before terminating, so this is an unexpected death.
+      if (this.worker !== worker) return;
+      this.worker = undefined;
+      this.log.appendLine(`[index] worker exited with code ${code}`);
+      if (this.status?.state !== 'failed') this.setStatus(indexFailed(`the worker exited (code ${code})`));
     });
 
-    this.watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(
-        root.uri,
-        '{Resources/Prototypes,RobustToolbox/Resources/EnginePrototypes}/**/*.{yml,yaml}',
-      ),
-    );
+    this.watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root.uri, WATCH_GLOB));
     const queue = (uri: vscode.Uri) => this.queueUpdate(uri.fsPath);
     this.watcher.onDidChange(queue);
     this.watcher.onDidCreate(queue);
     this.watcher.onDidDelete(queue);
 
-    this.setStatus({ state: 'building', done: 0, total: 0 });
+    this.setStatus(indexBuilding(0, 0));
     this.send({
       type: 'build',
       forkRoot: root.uri.fsPath,
@@ -172,7 +190,7 @@ export class PrototypeIndexController implements vscode.Disposable {
   private onWorkerMessage(message: FromWorker): void {
     switch (message.type) {
       case 'progress':
-        this.setStatus({ state: 'building', done: message.done, total: message.total });
+        this.setStatus(indexBuilding(message.done, message.total));
         break;
       case 'loaded':
         this.index.replaceAll(message.records);
@@ -182,7 +200,7 @@ export class PrototypeIndexController implements vscode.Disposable {
           } in ${message.elapsedMs} ms` +
             (message.skippedFiles > 0 ? `, ${message.skippedFiles} files skipped` : ''),
         );
-        this.setStatus({ state: 'ready', count: this.index.size, skippedFiles: message.skippedFiles });
+        this.setStatus(indexReady(this.index.size, message.skippedFiles));
         this.updateEmitter.fire(undefined);
         break;
       case 'updated': {
@@ -195,7 +213,7 @@ export class PrototypeIndexController implements vscode.Disposable {
           );
           this.updateEmitter.fire(diff);
         }
-        this.setStatus({ state: 'ready', count: this.index.size, skippedFiles: message.skippedFiles });
+        this.setStatus(indexReady(this.index.size, message.skippedFiles));
         break;
       }
       case 'log':
@@ -203,7 +221,7 @@ export class PrototypeIndexController implements vscode.Disposable {
         break;
       case 'failed':
         this.log.appendLine(`[index] failed: ${message.reason}`);
-        this.setStatus({ state: 'failed', reason: message.reason });
+        this.setStatus(indexFailed(message.reason));
         break;
     }
   }
