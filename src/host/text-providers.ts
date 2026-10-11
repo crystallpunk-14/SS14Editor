@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import {
   completionsAt,
   definitionAt,
+  reopensSuggestAfterDeletion,
   type CompletionCandidate,
   type PrototypeIndexView,
   type SchemaRoot,
@@ -71,6 +72,7 @@ export class TextProviderController implements vscode.Disposable {
         selector,
         new PrototypeDefinitionProvider(getSchema, this.prototypeIndex, root.uri),
       ),
+      reopenSuggestOnDeletion(selector, getSchema, this.prototypeIndex),
     );
   }
 
@@ -78,6 +80,38 @@ export class TextProviderController implements vscode.Disposable {
     this.registration?.dispose();
     for (const disposable of this.disposables) disposable.dispose();
   }
+}
+
+/** `TextDocumentChangeReason` (VS Code 1.64+; not in the 1.49 typings this builds against). */
+const UNDO_OR_REDO = new Set([1, 2]);
+
+/**
+ * VS Code opens the suggestion list on typing but never on Backspace, so going
+ * back into a wrong value and deleting part of it shows nothing until the next
+ * letter. After a plain deletion in the active prototype editor, reopen the list
+ * where {@link reopensSuggestAfterDeletion} says there is something to offer.
+ */
+function reopenSuggestOnDeletion(
+  selector: vscode.DocumentSelector,
+  getSchema: () => SchemaRoot | null,
+  index: PrototypeIndexView,
+): vscode.Disposable {
+  return vscode.workspace.onDidChangeTextDocument((event) => {
+    const editor = vscode.window.activeTextEditor;
+    if (editor?.document !== event.document || vscode.languages.match(selector, event.document) === 0) return;
+    if (UNDO_OR_REDO.has((event as { reason?: number }).reason ?? 0)) return;
+
+    const [change, ...more] = event.contentChanges;
+    if (!change || more.length > 0 || change.text !== '' || change.rangeLength === 0) return;
+
+    const schema = getSchema();
+    if (!schema) return;
+    // A deletion leaves the caret where the removed range started.
+    const offset = event.document.offsetAt(change.range.start);
+    if (reopensSuggestAfterDeletion(event.document.getText(), offset, schema, index)) {
+      void vscode.commands.executeCommand('editor.action.triggerSuggest');
+    }
+  });
 }
 
 /** YAML prototype files of one fork — the selector every schema-aware provider shares. */

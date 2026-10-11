@@ -31,6 +31,9 @@ const ENTITIES = [
 const REAGENTS_PATH = 'Resources/Prototypes/Reagents/fuel.yml';
 const REAGENTS = ['- type: reagent', '  id: WeldingFuel', '', '- type: reagent', '  id: SpaceLube', ''].join('\n');
 
+const DAMAGE_PATH = 'Resources/Prototypes/Damage/types.yml';
+const DAMAGE = ['- type: damageType', '  id: Blunt', '', '- type: damageType', '  id: Slash', ''].join('\n');
+
 const ENGINE_PATH = 'RobustToolbox/Resources/EnginePrototypes/base.yml';
 const ENGINE = ['- type: entity', '  id: EngineBase', '  abstract: true', ''].join('\n');
 
@@ -45,6 +48,7 @@ function readyIndex(): PrototypeIndex {
   index.replaceAll([
     ...records(ENTITIES, ENTITIES_PATH, false),
     ...records(REAGENTS, REAGENTS_PATH, false),
+    ...records(DAMAGE, DAMAGE_PATH, false),
     ...records(ENGINE, ENGINE_PATH, true),
   ]);
   return index;
@@ -211,6 +215,41 @@ describe('prototype ids below a dictionary key', () => {
   it('offers entities on a bare `- ` item there', () => {
     const { text, offset } = atEnd([...animation, '      - ']);
     expect(labels(text, offset)).toEqual(ALL_ENTITIES);
+  });
+});
+
+/**
+ * A dictionary keyed by prototype id — `DamageSpecifier.types` is
+ * `Dictionary<ProtoId<DamageTypePrototype>, FixedPoint2>` — takes ids in its
+ * key position, not field names.
+ */
+describe('prototype ids as dictionary keys', () => {
+  const melee = ['- type: entity', '  id: X', '  components:', '  - type: MeleeWeapon', '    damage:', '      types:'];
+
+  it('offers the key type\'s ids on a key in progress, carrying the colon', () => {
+    const { text, offset } = atEnd([...melee, '        Bl']);
+    const candidates = completionsAt(text, offset, SCHEMA, INDEX);
+    expect(candidates.map((c) => c.label)).toEqual(['Blunt', 'Slash']);
+    expect(candidates[0]).toMatchObject({ kind: 'id', insertText: 'Blunt: ' });
+  });
+
+  it('drops keys already written in the dictionary', () => {
+    const { text, offset } = atEnd([...melee, '        Blunt: 5', '        ']);
+    expect(labels(text, offset)).toEqual(['Slash']);
+  });
+
+  it('offers ids on an existing key without a second colon', () => {
+    const { text, offset } = after([...melee, '        Blunt: 5'], '        Bl');
+    const candidates = completionsAt(text, offset, SCHEMA, INDEX);
+    expect(candidates.map((c) => c.label)).toEqual(['Blunt', 'Slash']);
+    expect(candidates.every((c) => c.insertText === undefined)).toBe(true);
+  });
+
+  it('targets the key\'s declaration', () => {
+    const { text, offset } = after([...melee, '        Slash: 5'], '        Sl');
+    const definition = definitionAt(text, offset, SCHEMA, INDEX);
+    expect(definition?.target).toMatchObject({ kind: 'damageType', id: 'Slash', filePath: DAMAGE_PATH });
+    expect(text.slice(...definition!.origin)).toBe('Slash');
   });
 });
 

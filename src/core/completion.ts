@@ -124,7 +124,9 @@ export function completionsAt(
     case 'component-type':
       return componentNameCandidates(schema, insertPrefix);
     case 'key':
-      return fieldKeyCandidates(ctx, schema, keyNeedsColon);
+      return containerFields(ctx, schema)
+        ? fieldKeyCandidates(ctx, schema, keyNeedsColon)
+        : dictionaryKeyCandidates(ctx, schema, index, keyNeedsColon);
     case 'value':
       return onPrototypeTypeSlot(ctx)
         ? prototypeNameCandidates(schema, insertPrefix)
@@ -133,6 +135,33 @@ export function completionsAt(
       return [];
   }
 }
+
+/**
+ * Whether the host should reopen the suggestion list after a deletion left the
+ * caret at `offset`. VS Code opens it on typing but never on Backspace, so
+ * going back into a wrong value and deleting part of it shows nothing.
+ *
+ * Reopens only where the caret still touches a partial word, or sits in a value
+ * slot the deletion emptied (`type: `) — never on a blank line, so deleting
+ * whole lines does not keep popping the list — and only where there is
+ * something to offer.
+ */
+export function reopensSuggestAfterDeletion(
+  text: string,
+  offset: number,
+  schema: SchemaRoot,
+  index?: PrototypeIndexView,
+): boolean {
+  const before = text.slice(lineStartAt(text, offset), offset);
+  if (!PARTIAL_WORD.test(before) && !EMPTIED_VALUE.test(before)) return false;
+  return completionsAt(text, offset, schema, index).length > 0;
+}
+
+/** A line that ends in the middle of a word — not on whitespace, `:` or `-`. */
+const PARTIAL_WORD = /[^\s:\-#,[\]{}'"]$/;
+
+/** A line that ends in an empty value slot: `key:` plus at least one space. */
+const EMPTIED_VALUE = /:[ \t]+$/;
 
 /**
  * True on the value slot of a prototype's own `type:` — the sibling of the
@@ -424,8 +453,7 @@ function fieldKeyCandidates(
   const container = containerFields(ctx, schema);
   if (!container) return [];
 
-  const caretKey = ctx.fieldPath[ctx.fieldPath.length - 1];
-  const alreadyPresent = new Set(ctx.containerKeys.filter((key) => key !== caretKey));
+  const alreadyPresent = siblingKeys(ctx);
 
   return container
     .filter((field) => !alreadyPresent.has(field.tag))
@@ -438,6 +466,33 @@ function fieldKeyCandidates(
       ...(needsColon ? { insertText: `${field.tag}: ` } : {}),
     }))
     .sort(byLabel);
+}
+
+/**
+ * A key inside a dictionary is data of the dictionary's key type, so it takes
+ * that type's values — prototype ids for `Dictionary<ProtoId<T>, …>`
+ * (`damage.types`), enum members for an enum-keyed one — minus the keys already
+ * written, each carrying its colon when the line has none yet.
+ */
+function dictionaryKeyCandidates(
+  ctx: CursorContext,
+  schema: SchemaRoot,
+  index: PrototypeIndexView | undefined,
+  needsColon: boolean,
+): CompletionCandidate[] {
+  const slot = keySlotAt(ctx, schema);
+  if (!slot) return [];
+
+  const alreadyPresent = siblingKeys(ctx);
+  return slotCandidates(slot, ctx, schema, index, '')
+    .filter((candidate) => !alreadyPresent.has(candidate.label))
+    .map((candidate) => (needsColon ? { ...candidate, insertText: `${candidate.label}: ` } : candidate));
+}
+
+/** Keys already written beside the caret's key, which a key completion must not offer again. */
+function siblingKeys(ctx: CursorContext): Set<string> {
+  const caretKey = ctx.fieldPath[ctx.fieldPath.length - 1];
+  return new Set(ctx.containerKeys.filter((key) => key !== caretKey));
 }
 
 // ---------------------------------------------------------------------------
@@ -458,8 +513,17 @@ function valueCandidates(
   insertPrefix: string,
 ): CompletionCandidate[] {
   const slot = slotAt(ctx, schema);
-  if (!slot) return [];
+  return slot ? slotCandidates(slot, ctx, schema, index, insertPrefix) : [];
+}
 
+/** What a slot accepts: prototype ids when it references prototypes, else its listable values. */
+function slotCandidates(
+  slot: Slot,
+  ctx: CursorContext,
+  schema: SchemaRoot,
+  index: PrototypeIndexView | undefined,
+  insertPrefix: string,
+): CompletionCandidate[] {
   const refKind = protoRefKind(slot, ctx.prototypeType);
   if (refKind !== null) return idCandidates(refKind, index, insertPrefix);
 
@@ -494,9 +558,13 @@ function protoRefKind(slot: Slot, prototypeType: string | null): string | null {
   return null;
 }
 
-/** {@link protoRefKind} of the slot the caret's context lands on, or `null`. */
+/**
+ * {@link protoRefKind} of what the caret is on, or `null`: a value's slot, or —
+ * on a key — the key type of the dictionary it sits in.
+ */
 export function protoRefKindAt(ctx: CursorContext, schema: SchemaRoot): string | null {
-  const slot = slotAt(ctx, schema);
+  const slot =
+    ctx.token.kind === 'value' ? slotAt(ctx, schema) : ctx.token.kind === 'key' ? keySlotAt(ctx, schema) : null;
   return slot ? protoRefKind(slot, ctx.prototypeType) : null;
 }
 
@@ -580,7 +648,7 @@ interface FieldRef {
  * (a list's element, a dictionary's value). A field carries its kind as
  * `fieldKind`; {@link nodeOf} lifts it into this shape.
  */
-type TypeNode = Omit<FieldTypeNode, 'tupleElements' | 'key'>;
+type TypeNode = Omit<FieldTypeNode, 'tupleElements'>;
 
 function nodeOf(field: FieldMetadata): TypeNode {
   return { ...field, kind: field.fieldKind };
@@ -620,6 +688,16 @@ function slotAt(ref: FieldRef, schema: SchemaRoot): Slot | null {
   if (ref.fieldPath.length === 0) return null;
   const scope = scopeAt(ref, schema);
   return scope ? slotIn(scope, ref.fieldPath[ref.fieldPath.length - 1]) : null;
+}
+
+/**
+ * The key type of the dictionary `ref`'s last key sits in, or `null` when that
+ * key is a field name rather than a dictionary key.
+ */
+function keySlotAt(ref: FieldRef, schema: SchemaRoot): Slot | null {
+  const scope = scopeAt(ref, schema);
+  const key = scope && 'dictionary' in scope ? scope.dictionary.key : undefined;
+  return key ? { field: null, node: key } : null;
 }
 
 /**

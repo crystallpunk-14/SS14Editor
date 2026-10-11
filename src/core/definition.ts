@@ -7,7 +7,8 @@
  *
  * The caret must sit on the value of a field that names a prototype — the same
  * question autocomplete asks ({@link protoRefKindAt}): `parent:` (scalar, block
- * list or flow list), `ProtoId<T>`, `EntProtoId`, and lists of them. The id is
+ * list or flow list), `ProtoId<T>`, `EntProtoId`, and lists of them — or on a
+ * key of a dictionary keyed by one (`damage.types: { Blunt: 5 }`). The id is
  * looked up under that field's kind only, so an entity id written in a reagent
  * field has no target.
  */
@@ -41,9 +42,7 @@ export function definitionAt(
   const file = parsePrototypeFile(text);
   if (!file.ok) return null;
 
-  const ctx = contextAt(file, offset, schema);
-  if (ctx.token.kind !== 'value') return null;
-  const kind = protoRefKindAt(ctx, schema);
+  const kind = protoRefKindAt(contextAt(file, offset, schema), schema);
   if (kind === null) return null;
 
   const origin = idSpanAt(file.text, offset);

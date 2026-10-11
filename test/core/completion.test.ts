@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { completionsAt } from '../../src/core/completion';
+import { completionsAt, reopensSuggestAfterDeletion } from '../../src/core/completion';
 import { parsedFixture, schemaSnapshot } from './prototype-fixtures';
 
 /** Candidate assertions below name components/fields/enums present in the snapshot. */
@@ -654,5 +654,38 @@ describe.each([
     expect(candidates.map((c) => c.label)).toContain('color');
     expect(candidates.map((c) => c.label)).not.toContain('sprite'); // already written
     expect(candidates.every((c) => c.insertText === `${c.label}: `)).toBe(true);
+  });
+});
+
+/**
+ * VS Code never opens suggestions on a deletion, so backspacing into a wrong
+ * value shows nothing until the next letter. The host asks this predicate after
+ * each deletion and reopens the list itself (issue #33 follow-up).
+ */
+describe('reopensSuggestAfterDeletion', () => {
+  function caretAtEnd(lines: readonly string[]): { text: string; offset: number } {
+    const joined = lines.join('\n');
+    return { text: joined + '\n', offset: joined.length };
+  }
+
+  it.each([
+    ['a prototype type', ['- type: ent']],
+    ['a component name', ['- type: entity', '  id: X', '  components:', '  - type: Spri']],
+    ['a field key', ['- type: entity', '  id: X', '  components:', '  - type: MeleeWeapon', '    swingL']],
+    ['an enum value', ['- type: entity', '  id: X', '  components:', '  - type: Action', '    itemIconStyle: Bi']],
+    ['an emptied value slot', ['- type: ']],
+  ])('reopens inside %s', (_name, lines) => {
+    const { text, offset } = caretAtEnd(lines);
+    expect(reopensSuggestAfterDeletion(text, offset, SCHEMA)).toBe(true);
+  });
+
+  it('stays closed on a blank line, so deleting lines does not pop the list', () => {
+    const { text, offset } = caretAtEnd(['- type: entity', '  id: X', '  ']);
+    expect(reopensSuggestAfterDeletion(text, offset, SCHEMA)).toBe(false);
+  });
+
+  it('stays closed where there is nothing to offer', () => {
+    const { text, offset } = caretAtEnd(['- type: entity', '  id: X', '  name: fo']);
+    expect(reopensSuggestAfterDeletion(text, offset, SCHEMA)).toBe(false);
   });
 });
