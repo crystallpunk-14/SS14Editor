@@ -1,4 +1,5 @@
 import type { SchemaStatus } from '../core';
+import { indexStatusMessage, type IndexStatus } from '../core/index-status';
 import type { ForkFolderStatus } from '../shared/protocol';
 
 /**
@@ -16,16 +17,26 @@ export interface ViewState {
   folder: ForkFolderStatus | null;
   /** `null` until the first extractor run, or when the fork is not a built fork. */
   schema: SchemaStatus | null;
+  /** `null` until the index starts building, or when the fork is not a built fork. */
+  index: IndexStatus | null;
 }
 
 export const initialState: ViewState = {
   extensionVersion: undefined,
   folder: null,
   schema: null,
+  index: null,
 };
 
 export function render(root: HTMLElement, state: ViewState): void {
-  root.textContent = statusText(state);
+  const lines = [statusText(state), indexText(state)].filter((line): line is string => line !== null);
+  root.replaceChildren(
+    ...lines.map((line) => {
+      const div = document.createElement('div');
+      div.textContent = line;
+      return div;
+    }),
+  );
 }
 
 /**
@@ -39,4 +50,10 @@ function statusText(state: ViewState): string {
   if (!folder.status.recognized) return folder.status.message;
   if (schema === null) return '✓ SS14 fork recognized. Extracting schema…';
   return schema.message;
+}
+
+/** The prototype index's own line (issue #28), under the fork/schema line. */
+function indexText(state: ViewState): string | null {
+  if (state.folder === null || !state.folder.status.recognized || state.index === null) return null;
+  return indexStatusMessage(state.index);
 }

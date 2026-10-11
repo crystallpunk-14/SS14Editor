@@ -34,6 +34,9 @@ window.addEventListener('message', (event: MessageEvent<HostToWebview>) => {
     case 'schemaStatus':
       update({ schema: message.status });
       break;
+    case 'indexStatus':
+      update({ index: message.status });
+      break;
   }
 });
 

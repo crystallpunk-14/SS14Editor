@@ -54,6 +54,19 @@ export type {
   EnumConstantEntry,
 } from './schema-contract';
 
+export {
+  collectRecords,
+  diffRecords,
+  PrototypeIndex,
+  INDEX_CACHE_FORMAT,
+  indexFingerprint,
+  serializeIndexCache,
+  parseIndexCache,
+} from './prototype-index';
+export type { PrototypeRecord, CollectResult, RecordDiff, IndexLookup } from './prototype-index';
+export { indexStatusMessage } from './index-status';
+export type { IndexStatus } from './index-status';
+
 export { completionsAt } from './completion';
 export type { CompletionCandidate } from './completion';
 

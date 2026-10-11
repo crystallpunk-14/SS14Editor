@@ -7,7 +7,7 @@
  * untyped `postMessage` blobs (spec #20).
  */
 
-import type { ForkStatus, SchemaStatus } from '../core';
+import type { ForkStatus, IndexStatus, SchemaStatus } from '../core';
 
 export interface HelloMessage {
   type: 'hello';
@@ -47,8 +47,23 @@ export interface SchemaStatusMessage {
   status: SchemaStatus | null;
 }
 
+/**
+ * The prototype index's progress or result (issue #28). `status` is `null` when
+ * the fork is not a recognised, freshly-built fork. Re-sent on build progress,
+ * when a build or cache load finishes, after every incremental update, and
+ * whenever the view becomes visible again.
+ */
+export interface IndexStatusMessage {
+  type: 'indexStatus';
+  status: IndexStatus | null;
+}
+
 /** Messages the host sends to the webview. */
-export type HostToWebview = HelloMessage | ForkStatusMessage | SchemaStatusMessage;
+export type HostToWebview =
+  | HelloMessage
+  | ForkStatusMessage
+  | SchemaStatusMessage
+  | IndexStatusMessage;
 
 /** Messages the webview sends to the host. */
 export type WebviewToHost = ReadyMessage;

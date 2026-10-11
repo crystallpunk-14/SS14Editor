@@ -26,6 +26,11 @@
         "command": "ss14editor.rebuildSchema",
         "title": "Rebuild schema",
         "category": "SS14"
+      },
+      {
+        "command": "ss14editor.rebuildPrototypeIndex",
+        "title": "Rebuild prototype index",
+        "category": "SS14"
       }
     ],
     "viewsContainers": {

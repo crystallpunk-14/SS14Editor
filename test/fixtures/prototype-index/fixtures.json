@@ -1,0 +1,508 @@
+{
+  "multiParentExample": {
+    "id": "ActionActivateMicroBomb",
+    "kind": "entity",
+    "file": "Resources\\Prototypes\\Actions\\types.yml",
+    "own": {
+      "type": "entity",
+      "parent": [
+        "BaseSuicideAction",
+        "BaseImplantAction"
+      ],
+      "id": "ActionActivateMicroBomb",
+      "name": "Activate Microbomb",
+      "description": "Activates your internal microbomb, completely destroying you and your equipment",
+      "components": [
+        {
+          "type": "DangerousAction"
+        },
+        {
+          "type": "Action",
+          "itemIconStyle": "BigAction",
+          "priority": -20
+        },
+        {
+          "type": "Sprite",
+          "sprite": "Actions/Implants/implants.rsi",
+          "layers": [
+            {
+              "state": "explosive"
+            }
+          ]
+        }
+      ]
+    },
+    "parents": [
+      {
+        "id": "BaseSuicideAction",
+        "own": {
+          "type": "entity",
+          "abstract": true,
+          "parent": "BaseMentalAction",
+          "id": "BaseSuicideAction",
+          "components": [
+            {
+              "type": "ConfirmableAction",
+              "popup": "suicide-action-popup"
+            }
+          ]
+        },
+        "file": "Resources\\Prototypes\\Actions\\types.yml"
+      },
+      {
+        "id": "BaseImplantAction",
+        "own": {
+          "type": "entity",
+          "abstract": true,
+          "parent": "BaseAction",
+          "id": "BaseImplantAction",
+          "components": [
+            {
+              "type": "InstantAction",
+              "event": ""
+            }
+          ]
+        },
+        "file": "Resources\\Prototypes\\Actions\\types.yml"
+      }
+    ],
+    "conflictField": "components"
+  },
+  "deepChain": [
+    {
+      "id": "BoxSurvivalHugNitrogen",
+      "own": {
+        "type": "entity",
+        "parent": "BoxSurvivalHug",
+        "id": "BoxSurvivalHugNitrogen",
+        "suffix": "Survival; N2",
+        "components": [
+          {
+            "type": "EntityTableContainerFill",
+            "containers": {
+              "storagebase": {
+                "children": [
+                  {
+                    "id": "ClothingMaskBreath"
+                  },
+                  {
+                    "id": "EmergencyNitrogenTankFilled"
+                  },
+                  {
+                    "id": "EmergencyMedipen"
+                  },
+                  {
+                    "id": "Flare"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Catalog\\Fills\\Boxes\\emergency.yml",
+      "abstract": false
+    },
+    {
+      "id": "BoxSurvivalHug",
+      "own": {
+        "type": "entity",
+        "parent": "BoxHug",
+        "id": "BoxSurvivalHug",
+        "suffix": "Survival; O2",
+        "components": [
+          {
+            "type": "EntityTableContainerFill",
+            "containers": {
+              "storagebase": {
+                "children": [
+                  {
+                    "id": "ClothingMaskBreath"
+                  },
+                  {
+                    "id": "EmergencyFunnyOxygenTankFilled"
+                  },
+                  {
+                    "id": "EmergencyMedipen"
+                  },
+                  {
+                    "id": "Flare"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Catalog\\Fills\\Boxes\\emergency.yml",
+      "abstract": false
+    },
+    {
+      "id": "BoxHug",
+      "own": {
+        "type": "entity",
+        "parent": "BoxBaseHug",
+        "id": "BoxHug",
+        "name": "box of hugs",
+        "description": "A special box for sensitive people.",
+        "components": [
+          {
+            "type": "PhysicalComposition",
+            "materialComposition": {
+              "Cardboard": 50
+            }
+          },
+          {
+            "type": "Sprite",
+            "layers": [
+              {
+                "state": "box_hug"
+              },
+              {
+                "state": "heart"
+              }
+            ]
+          },
+          {
+            "type": "Tag",
+            "tags": [
+              "BoxCardboard",
+              "BoxHug"
+            ]
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Catalog\\Fills\\Boxes\\general.yml",
+      "abstract": false
+    },
+    {
+      "id": "BoxBaseHug",
+      "own": {
+        "type": "entity",
+        "abstract": true,
+        "parent": "BaseBoxSurvival",
+        "id": "BoxBaseHug",
+        "components": [
+          {
+            "type": "Item",
+            "heldPrefix": "hug"
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Entities\\Objects\\Misc\\box.yml",
+      "abstract": true
+    },
+    {
+      "id": "BaseBoxSurvival",
+      "own": {
+        "type": "entity",
+        "parent": "BoxCardboardSmall",
+        "id": "BaseBoxSurvival",
+        "abstract": true,
+        "components": [
+          {
+            "type": "Item",
+            "shape": [
+              "0,0,1,2"
+            ]
+          },
+          {
+            "type": "Storage",
+            "grid": [
+              "0,0,1,2"
+            ]
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Catalog\\Fills\\Boxes\\emergency.yml",
+      "abstract": true
+    },
+    {
+      "id": "BoxCardboardSmall",
+      "own": {
+        "type": "entity",
+        "parent": "BoxBaseSmall",
+        "id": "BoxCardboardSmall",
+        "name": "small cardboard box",
+        "description": "A small cardboard box for storing things.",
+        "components": [
+          {
+            "type": "Construction",
+            "graph": "BoxCardboardSmall",
+            "node": "boxcardboardsmall",
+            "containers": [
+              "storagebase"
+            ]
+          },
+          {
+            "type": "PhysicalComposition",
+            "materialComposition": {
+              "Cardboard": 50
+            }
+          },
+          {
+            "type": "Sprite",
+            "state": "box"
+          },
+          {
+            "type": "Tag",
+            "tags": [
+              "BoxCardboard"
+            ]
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Catalog\\Fills\\Boxes\\general.yml",
+      "abstract": false
+    },
+    {
+      "id": "BoxBaseSmall",
+      "own": {
+        "type": "entity",
+        "abstract": true,
+        "parent": "BoxBase",
+        "id": "BoxBaseSmall",
+        "components": [
+          {
+            "type": "Item",
+            "size": "Normal",
+            "shape": [
+              "0,0,1,1"
+            ]
+          },
+          {
+            "type": "Storage",
+            "grid": [
+              "0,0,1,1"
+            ]
+          },
+          {
+            "type": "StaticPrice",
+            "price": 5
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Entities\\Objects\\Misc\\box.yml",
+      "abstract": true
+    },
+    {
+      "id": "BoxBase",
+      "own": {
+        "type": "entity",
+        "abstract": true,
+        "parent": "BaseStorageItem",
+        "id": "BoxBase",
+        "components": [
+          {
+            "type": "Sprite",
+            "sprite": "Objects/Storage/boxes.rsi"
+          },
+          {
+            "type": "Item",
+            "sprite": "Objects/Storage/boxes.rsi",
+            "size": "Large",
+            "shape": [
+              "0,0,2,2"
+            ]
+          },
+          {
+            "type": "Storage",
+            "maxItemSize": "Small",
+            "grid": [
+              "0,0,2,2"
+            ]
+          },
+          {
+            "type": "ContainerContainer",
+            "containers": {
+              "storagebase": ""
+            }
+          },
+          {
+            "type": "StaticPrice",
+            "price": 10
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Entities\\Objects\\Misc\\box.yml",
+      "abstract": true
+    },
+    {
+      "id": "BaseStorageItem",
+      "own": {
+        "type": "entity",
+        "name": "storage item",
+        "id": "BaseStorageItem",
+        "parent": "BaseItem",
+        "abstract": true,
+        "components": [
+          {
+            "type": "Storage"
+          },
+          {
+            "type": "UserInterface",
+            "interfaces": {
+              "enum.StorageUiKey.Key": {
+                "type": "StorageBoundUserInterface"
+              }
+            }
+          },
+          {
+            "type": "ContainerContainer",
+            "containers": {
+              "storagebase": {
+                "ents": []
+              }
+            }
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Entities\\Objects\\base_item.yml",
+      "abstract": true
+    },
+    {
+      "id": "BaseItem",
+      "own": {
+        "type": "entity",
+        "abstract": true,
+        "id": "BaseItem",
+        "name": "item",
+        "components": [
+          {
+            "type": "Item",
+            "size": "Small"
+          },
+          {
+            "type": "Animateable"
+          },
+          {
+            "type": "Clickable"
+          },
+          {
+            "type": "InteractionOutline"
+          },
+          {
+            "type": "MovedByPressure"
+          },
+          {
+            "type": "EmitSoundOnCollide",
+            "sound": {
+              "collection": "WeakHit"
+            }
+          },
+          {
+            "type": "EmitSoundOnLand",
+            "sound": {
+              "path": "/Audio/Effects/drop.ogg",
+              "params": {
+                "volume": 2
+              }
+            }
+          },
+          {
+            "type": "DamageOnHighSpeedImpact",
+            "damage": {
+              "types": {
+                "Blunt": 5
+              }
+            },
+            "soundHit": {
+              "collection": "MetalThud"
+            }
+          },
+          {
+            "type": "CollisionWake"
+          },
+          {
+            "type": "GravityAffected"
+          },
+          {
+            "type": "Physics",
+            "bodyType": "Dynamic",
+            "fixedRotation": false
+          },
+          {
+            "type": "Fixtures",
+            "fixtures": {
+              "fix1": {
+                "shape": {
+                  "bounds": "-0.25,-0.25,0.25,0.25"
+                },
+                "density": 20,
+                "mask": [
+                  "Impassable"
+                ],
+                "restitution": 0.3,
+                "friction": 0.2
+              }
+            }
+          },
+          {
+            "type": "Sprite",
+            "drawdepth": "Items",
+            "noRot": false
+          },
+          {
+            "type": "Pullable"
+          },
+          {
+            "type": "DamageExaminable"
+          },
+          {
+            "type": "CEZPhysics"
+          },
+          {
+            "type": "Rotatable",
+            "increment": 30
+          }
+        ]
+      },
+      "file": "Resources\\Prototypes\\Entities\\Objects\\base_item.yml",
+      "abstract": true
+    }
+  ],
+  "abstractExample": {
+    "id": "BaseActionChangelingSting",
+    "own": {
+      "type": "entity",
+      "abstract": true,
+      "parent": "BaseAction",
+      "id": "BaseActionChangelingSting",
+      "components": [
+        {
+          "type": "TargetAction",
+          "interactOnMiss": false
+        },
+        {
+          "type": "EntityTargetAction",
+          "whitelist": {
+            "components": [
+              "Bloodstream"
+            ]
+          },
+          "event": ""
+        },
+        {
+          "type": "ActionRequireSatiation",
+          "satiation": "Chemicals",
+          "amount": 30,
+          "failReason": "changeling-not-enough-chemicals"
+        },
+        {
+          "type": "PopupOnAction",
+          "popupType": "Medium",
+          "selfMessage": "changeling-sting-success"
+        }
+      ]
+    },
+    "file": "Resources\\Prototypes\\Actions\\changeling.yml"
+  },
+  "smallKindExample": {
+    "id": "AccessBreakerImmune",
+    "own": {
+      "type": "Tag",
+      "id": "AccessBreakerImmune"
+    },
+    "file": "Resources\\Prototypes\\tags.yml"
+  }
+}

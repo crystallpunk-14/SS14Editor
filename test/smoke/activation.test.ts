@@ -38,6 +38,26 @@ suite('activation smoke', () => {
     );
   });
 
+  test('the "SS14: Rebuild prototype index" command is contributed and registered', async () => {
+    const ext = vscode.extensions.getExtension(QUALIFIED_EXTENSION_ID);
+    const commands = (ext?.packageJSON?.contributes?.commands ?? []) as Array<{
+      command: string;
+      title: string;
+      category?: string;
+    }>;
+    const rebuild = commands.find((c) => c.command === 'ss14editor.rebuildPrototypeIndex');
+    assert.ok(rebuild, 'ss14editor.rebuildPrototypeIndex is not contributed');
+    assert.strictEqual(rebuild.title, 'Rebuild prototype index');
+    assert.strictEqual(rebuild.category, 'SS14');
+
+    await ext?.activate();
+    const registered = await vscode.commands.getCommands(true);
+    assert.ok(
+      registered.includes('ss14editor.rebuildPrototypeIndex'),
+      'ss14editor.rebuildPrototypeIndex is not registered after activation',
+    );
+  });
+
   test('the inspector webview view is contributed', () => {
     const ext = vscode.extensions.getExtension(QUALIFIED_EXTENSION_ID);
     const views = (ext?.packageJSON?.contributes?.views ?? {}) as Record<
