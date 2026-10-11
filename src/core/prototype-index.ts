@@ -199,6 +199,13 @@ export type IndexLookup =
   | { readonly ready: true; readonly record: PrototypeRecord | undefined };
 
 /**
+ * The read side of {@link PrototypeIndex} — what the text providers consume
+ * (issue #33). A snapshot in the sense that providers only read it, at the
+ * moment they are asked.
+ */
+export type PrototypeIndexView = Pick<PrototypeIndex, 'ready' | 'get' | 'all'>;
+
+/**
  * The live index: records grouped by file (the unit of incremental update) and
  * by `(kind, id)` (the unit of lookup). Duplicate keys across files are all
  * kept, so dropping one file never hides its twin in another.

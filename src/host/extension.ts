@@ -20,7 +20,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const forkStatus = new ForkStatusController();
   const schema = new SchemaController(context, forkStatus);
   const prototypeIndex = new PrototypeIndexController(context, forkStatus, log);
-  const textProviders = new TextProviderController(forkStatus, schema);
+  const textProviders = new TextProviderController(forkStatus, schema, prototypeIndex.index);
 
   context.subscriptions.push(
     log,

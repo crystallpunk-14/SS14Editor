@@ -1,30 +1,10 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
 import { describe, expect, it } from 'vitest';
 
 import { completionsAt } from '../../src/core/completion';
-import { parseSchemaDocument } from '../../src/core/schema';
-import type { SchemaRoot } from '../../src/core/schema-contract';
-import { parsedFixture } from './prototype-fixtures';
+import { parsedFixture, schemaSnapshot } from './prototype-fixtures';
 
-/**
- * The real schema snapshot the CLI (issue #22) produced on `crystall-edge`,
- * committed at `schema-cli/fixtures/metadata.json` — the same file the schema
- * tests read. Candidate assertions below name components/fields/enums that are
- * present in it.
- */
-function schema(): SchemaRoot {
-  const text = readFileSync(
-    fileURLToPath(new URL('../../schema-cli/fixtures/metadata.json', import.meta.url)),
-    'utf8',
-  );
-  const parsed = parseSchemaDocument(text);
-  if (!parsed.ok) throw new Error(`schema snapshot did not parse: ${parsed.reason}`);
-  return parsed.root;
-}
-
-const SCHEMA = schema();
+/** Candidate assertions below name components/fields/enums present in the snapshot. */
+const SCHEMA = schemaSnapshot();
 
 /** Labels of the candidates, for set-style assertions. */
 function labels(file: ReturnType<typeof parsedFixture>, offset: number): string[] {

@@ -1,6 +1,12 @@
 import * as vscode from 'vscode';
 
-import { completionsAt, type CompletionCandidate, type SchemaRoot } from '../core';
+import {
+  completionsAt,
+  definitionAt,
+  type CompletionCandidate,
+  type PrototypeIndexView,
+  type SchemaRoot,
+} from '../core';
 import type { ForkStatusController } from './fork-status-controller';
 import type { SchemaController } from './schema-controller';
 
@@ -17,8 +23,12 @@ import type { SchemaController } from './schema-controller';
  * are simply not registered, so they stay silent (issue #27 acceptance
  * criterion: "до готовности схемы провайдер молчит").
  *
- * Hover and go-to-definition (later tickets) register alongside completion here,
- * on the same {@link selectorFor} selector.
+ * Go-to-definition (issue #33) registers alongside completion, on the same
+ * {@link selectorFor} selector; VS Code serves a `DefinitionProvider` on both
+ * Ctrl+Click and F12. Both also read the prototype index, which is consulted
+ * per request rather than gating the registration: until it is ready, ids
+ * simply have no candidates and no target. Hover (a later ticket) registers here
+ * too.
  */
 export class TextProviderController implements vscode.Disposable {
   private registration: vscode.Disposable | undefined;
@@ -29,6 +39,7 @@ export class TextProviderController implements vscode.Disposable {
   constructor(
     private readonly forkStatus: ForkStatusController,
     private readonly schema: SchemaController,
+    private readonly prototypeIndex: PrototypeIndexView,
   ) {
     this.disposables.push(this.schema.onDidChange(() => this.sync()));
     this.sync();
@@ -47,11 +58,19 @@ export class TextProviderController implements vscode.Disposable {
     this.registeredRoot = wantedRoot;
     if (!root || wantedRoot === undefined) return;
 
-    this.registration = vscode.languages.registerCompletionItemProvider(
-      selectorFor(root.uri),
-      new PrototypeCompletionProvider(() => this.schema.schema),
-      ' ',
-      ':',
+    const selector = selectorFor(root.uri);
+    const getSchema = () => this.schema.schema;
+    this.registration = vscode.Disposable.from(
+      vscode.languages.registerCompletionItemProvider(
+        selector,
+        new PrototypeCompletionProvider(getSchema, this.prototypeIndex),
+        ' ',
+        ':',
+      ),
+      vscode.languages.registerDefinitionProvider(
+        selector,
+        new PrototypeDefinitionProvider(getSchema, this.prototypeIndex, root.uri),
+      ),
     );
   }
 
@@ -77,7 +96,10 @@ export function selectorFor(forkRoot: vscode.Uri): vscode.DocumentSelector {
  * schema-specific lives here.
  */
 export class PrototypeCompletionProvider implements vscode.CompletionItemProvider {
-  constructor(private readonly getSchema: () => SchemaRoot | null) {}
+  constructor(
+    private readonly getSchema: () => SchemaRoot | null,
+    private readonly index: PrototypeIndexView,
+  ) {}
 
   provideCompletionItems(
     document: vscode.TextDocument,
@@ -89,8 +111,58 @@ export class PrototypeCompletionProvider implements vscode.CompletionItemProvide
     // `document.getText()` is already BOM-free (VS Code strips it from the
     // model) and `offsetAt` counts over that same text, so offsets line up with
     // what the core parses.
-    const candidates = completionsAt(document.getText(), document.offsetAt(position), schema);
+    const candidates = completionsAt(document.getText(), document.offsetAt(position), schema, this.index);
     return candidates.map(toCompletionItem);
+  }
+}
+
+/**
+ * Thin adapter over {@link definitionAt}: the core names the declaration as a
+ * fork-relative path plus offsets, this opens that file to turn the offsets into
+ * a range. Engine prototypes resolve the same way, into
+ * `RobustToolbox/Resources/EnginePrototypes/`.
+ */
+export class PrototypeDefinitionProvider implements vscode.DefinitionProvider {
+  constructor(
+    private readonly getSchema: () => SchemaRoot | null,
+    private readonly index: PrototypeIndexView,
+    private readonly forkRoot: vscode.Uri,
+  ) {}
+
+  async provideDefinition(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+  ): Promise<vscode.LocationLink[] | undefined> {
+    const schema = this.getSchema();
+    if (!schema) return undefined;
+
+    const found = definitionAt(document.getText(), document.offsetAt(position), schema, this.index);
+    if (!found) return undefined;
+
+    const targetUri = vscode.Uri.joinPath(this.forkRoot, ...found.target.filePath.split('/'));
+    // Index offsets are into the BOM-stripped text, which is what a
+    // `TextDocument` holds too.
+    let target: vscode.TextDocument;
+    try {
+      target = await vscode.workspace.openTextDocument(targetUri);
+    } catch {
+      // The file went away since it was indexed; the watcher will drop it.
+      return undefined;
+    }
+    const [start, , end] = found.target.range;
+    const head = target.positionAt(start);
+
+    return [
+      {
+        originSelectionRange: new vscode.Range(
+          document.positionAt(found.origin[0]),
+          document.positionAt(found.origin[1]),
+        ),
+        targetUri,
+        targetRange: new vscode.Range(head, target.positionAt(end)),
+        targetSelectionRange: new vscode.Range(head, head),
+      },
+    ];
   }
 }
 
@@ -99,6 +171,7 @@ const KIND: Record<CompletionCandidate['kind'], vscode.CompletionItemKind> = {
   component: vscode.CompletionItemKind.Class,
   field: vscode.CompletionItemKind.Field,
   value: vscode.CompletionItemKind.EnumMember,
+  id: vscode.CompletionItemKind.Reference,
 };
 
 function toCompletionItem(candidate: CompletionCandidate): vscode.CompletionItem {

@@ -16,7 +16,9 @@
  *      its `[Prototype]` type (`entity` -> `EntityPrototype`, `reagent` ->
  *      `ReagentPrototype`, …);
  *   5. field values      — on a value slot, for the field kinds whose whole
- *      domain the schema carries: `boolean`, and the enum-backed `enum`/`flags`;
+ *      domain the schema carries: `boolean`, and the enum-backed `enum`/`flags`
+ *      — plus prototype ids (`protoId`/`entityProtoId`, and `parent:`), whose
+ *      domain is the prototype index rather than the schema (issue #33);
  *   6. prototype types   — on the `type:` value slot of the prototype itself,
  *      one level out from (1).
  *
@@ -63,7 +65,10 @@
  *
  * Where the rewrite had to invent the `type:` key (the bare `- ` case), the
  * candidates carry it back as {@link CompletionCandidate.insertText}, so picking
- * one writes the key the document is still missing.
+ * one writes the key the document is still missing. A bare `- ` in a list of
+ * prototype ids is the exception: it is first read as a scalar item
+ * (`<indent>- <sentinel>`), and only falls back to the `type:` rewrite when the
+ * list it sits in is not one of ids.
  */
 
 import {
@@ -72,6 +77,7 @@ import {
   type CursorContext,
   type PrototypeFile,
 } from './prototype-yaml';
+import type { PrototypeIndexView } from './prototype-index';
 import type {
   DataDefinitionMetadata,
   FieldMetadata,
@@ -83,8 +89,11 @@ import type {
 export interface CompletionCandidate {
   /** The name shown in the list — a prototype/component name, a field key, an enum member. */
   readonly label: string;
-  readonly kind: 'prototype' | 'component' | 'field' | 'value';
-  /** Short right-aligned signature: a declared type, a class name, or an enum type. */
+  readonly kind: 'prototype' | 'component' | 'field' | 'value' | 'id';
+  /**
+   * Short right-aligned signature: a declared type, a class name, an enum type,
+   * or — for an id — its prototype kind, `(abstract)` when it is one.
+   */
   readonly detail?: string;
   /**
    * Text to insert when it differs from {@link label} — set only where the caret
@@ -95,15 +104,17 @@ export interface CompletionCandidate {
 }
 
 /**
- * Candidates for the caret at `offset` in `text`, given the loaded `schema`.
- * Empty when the caret is not on one of the five completion points, the schema
- * has nothing to offer there, or the text cannot be parsed even after the
- * bare-key recovery below.
+ * Candidates for the caret at `offset` in `text`, given the loaded `schema` and
+ * the prototype `index`. Empty when the caret is not on one of the completion
+ * points, the schema (or, for an id, the index) has nothing to offer there, or
+ * the text cannot be parsed even after the bare-key recovery below. Ids need an
+ * index that is ready; without one their slot stays empty.
  */
 export function completionsAt(
   text: string,
   offset: number,
   schema: SchemaRoot,
+  index?: PrototypeIndexView,
 ): CompletionCandidate[] {
   const resolved = resolveCursor(text, offset, schema);
   if (!resolved) return [];
@@ -117,7 +128,7 @@ export function completionsAt(
     case 'value':
       return onPrototypeTypeSlot(ctx)
         ? prototypeNameCandidates(schema, insertPrefix)
-        : valueCandidates(ctx, schema);
+        : valueCandidates(ctx, schema, index, insertPrefix);
     default:
       return [];
   }
@@ -186,7 +197,11 @@ function resolveCursor(text: string, offset: number, schema: SchemaRoot): Resolv
   const keyNeedsColon = !line.includes(':');
 
   const rewrites = keyNeedsColon
-    ? [withTypeKey(text, offset, line), withSentinelKey(text, offset, line)]
+    ? [
+        withScalarItem(text, offset, line),
+        withTypeKey(text, offset, line),
+        withSentinelKey(text, offset, line),
+      ]
     : directCtx === null || directCtx.token.kind === 'none'
       ? [withValueSentinel(text, offset, line)]
       : [];
@@ -196,7 +211,7 @@ function resolveCursor(text: string, offset: number, schema: SchemaRoot): Resolv
     const retry = parsePrototypeFile(rewrite.text);
     if (!retry.ok) continue;
     const ctx = contextAt(retry, rewrite.offset, schema);
-    if (rewrite.expect.includes(ctx.token.kind)) {
+    if (rewrite.expect.includes(ctx.token.kind) && (rewrite.accept?.(ctx, schema) ?? true)) {
       return { ctx, insertPrefix: rewrite.insertPrefix, keyNeedsColon };
     }
   }
@@ -216,7 +231,7 @@ function resolveCursor(text: string, offset: number, schema: SchemaRoot): Resolv
  * So the answer is the declared `fieldKind` of whatever field the chain lands
  * on — the same lookup the field candidates use, never a name match.
  */
-function contextAt(file: PrototypeFile, offset: number, schema: SchemaRoot): CursorContext {
+export function contextAt(file: PrototypeFile, offset: number, schema: SchemaRoot): CursorContext {
   return cursorContextAt(file, offset, {
     isComponentRegistry: (site) => fieldAt(site, schema)?.fieldKind === COMPONENT_REGISTRY_KIND,
   });
@@ -244,6 +259,8 @@ interface Rewrite {
   readonly offset: number;
   /** Token kinds that mean the rewrite put the caret where it was meant to go. */
   readonly expect: readonly CursorContext['token']['kind'][];
+  /** A further check on where the caret landed, for rewrites that only fit some fields. */
+  readonly accept?: (ctx: CursorContext, schema: SchemaRoot) => boolean;
   readonly insertPrefix: string;
 }
 
@@ -270,6 +287,30 @@ function withSentinelKey(text: string, offset: number, line: string): Rewrite | 
     offset: start + indent.length + partial.length,
     expect: ['key'],
     insertPrefix: '',
+  };
+}
+
+/**
+ * A bare `- ` in a list of prototype ids (`parent:`, `List<EntProtoId>`, …) is
+ * the start of one more id. Rewrite it to `<indent>- <sentinel>` and accept the
+ * landing only when the list's field names prototypes — anywhere else a bare
+ * `- ` is a map item, and {@link withTypeKey} reads it.
+ */
+function withScalarItem(text: string, offset: number, line: string): Rewrite | null {
+  const match = SEQ_ITEM_START.exec(line);
+  if (!match) return null;
+
+  const [, indent, gap] = match;
+  const start = lineStartAt(text, offset);
+  const rewritten = `${indent}- ${KEY_SENTINEL}`;
+
+  return {
+    text: text.slice(0, start) + rewritten + text.slice(start + line.length),
+    offset: start + rewritten.length - KEY_SENTINEL.length,
+    expect: ['value'],
+    accept: (ctx, schema) => protoRefKindAt(ctx, schema) !== null,
+    // `-FireAxe` would be a scalar, not an item: re-supply the space.
+    insertPrefix: gap.length > 0 ? '' : ' ',
   };
 }
 
@@ -400,12 +441,20 @@ function fieldKeyCandidates(
 
 /**
  * Values a field will accept, chosen by its declared `fieldKind` rather than by
- * anything about its name. Only the kinds whose whole domain is in the schema
- * can be listed: `boolean`, and the enum-backed `enum` / `flags`. A `protoId`,
- * `resPath` or `entityProtoId` names something declared elsewhere in the fork,
- * which this document does not carry, so those stay empty.
+ * anything about its name. From the schema: the kinds whose whole domain it
+ * carries — `boolean`, and the enum-backed `enum` / `flags`. From the index: the
+ * ids a prototype reference ({@link protoRefKind}) may name. A `resPath` names a
+ * file, which neither carries, so it stays empty.
  */
-function valueCandidates(ctx: CursorContext, schema: SchemaRoot): CompletionCandidate[] {
+function valueCandidates(
+  ctx: CursorContext,
+  schema: SchemaRoot,
+  index: PrototypeIndexView | undefined,
+  insertPrefix: string,
+): CompletionCandidate[] {
+  const refKind = protoRefKindAt(ctx, schema);
+  if (refKind !== null) return idCandidates(refKind, index, insertPrefix);
+
   const field = fieldAt(ctx, schema);
   if (!field) return [];
 
@@ -414,6 +463,62 @@ function valueCandidates(ctx: CursorContext, schema: SchemaRoot): CompletionCand
 }
 
 const BOOLEAN_VALUES = ['false', 'true'] as const;
+
+/**
+ * The prototype kind a field's value names, or `null` when it names none:
+ *
+ *   - `parent:` (`isParent`) — the prototype's own kind: an entity inherits
+ *     from entities, a reagent from reagents;
+ *   - `EntProtoId` — always `entity`;
+ *   - `ProtoId<T>` — `T`'s YAML type, which the CLI emits as `protoTypeArg`.
+ *
+ * A list is read through its element, so `List<EntProtoId>` and a `parent:`
+ * list answer the same as a single value.
+ */
+function protoRefKind(field: FieldMetadata, prototypeType: string | null): string | null {
+  if (field.isParent) return prototypeType;
+
+  const element = field.fieldKind === 'list' ? field.element : undefined;
+  const kind = element ? element.kind : field.fieldKind;
+  if (kind === 'entityProtoId') return ENTITY_KIND;
+  if (kind === 'protoId') return (element ? element.protoTypeArg : field.protoTypeArg) ?? null;
+  return null;
+}
+
+/** {@link protoRefKind} of the field the caret's context lands on, or `null`. */
+export function protoRefKindAt(ctx: CursorContext, schema: SchemaRoot): string | null {
+  const field = fieldAt(ctx, schema);
+  return field ? protoRefKind(field, ctx.prototypeType) : null;
+}
+
+/** The `type:` of `EntityPrototype` — what every `EntProtoId` names. */
+const ENTITY_KIND = 'entity';
+
+/**
+ * Every id of `kind` in the index, abstract ones included — they are exactly
+ * what `parent:` wants. A duplicated id is listed once. Empty until the index
+ * is ready.
+ */
+function idCandidates(
+  kind: string,
+  index: PrototypeIndexView | undefined,
+  insertPrefix: string,
+): CompletionCandidate[] {
+  if (!index?.ready) return [];
+
+  const byId = new Map<string, CompletionCandidate>();
+  for (const record of index.all()) {
+    if (record.kind !== kind || byId.has(record.id)) continue;
+    const detail = record.abstract ? `${kind} (abstract)` : kind;
+    byId.set(
+      record.id,
+      insertPrefix
+        ? { label: record.id, kind: 'id', detail, insertText: `${insertPrefix}${record.id}` }
+        : { label: record.id, kind: 'id', detail },
+    );
+  }
+  return [...byId.values()].sort(byLabel);
+}
 
 /**
  * The listable domain of a field, read through its list `element` when the field
@@ -460,7 +565,7 @@ interface FieldRef {
 }
 
 /** Metadata of the field `ref`'s last key names, or `null` when the chain does not resolve. */
-function fieldAt(ref: FieldRef, schema: SchemaRoot): FieldMetadata | null {
+export function fieldAt(ref: FieldRef, schema: SchemaRoot): FieldMetadata | null {
   const container = containerFields(ref, schema);
   if (!container || ref.fieldPath.length === 0) return null;
 

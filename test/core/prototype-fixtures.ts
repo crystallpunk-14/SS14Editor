@@ -2,6 +2,23 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { parsePrototypeFile, type PrototypeFile } from '../../src/core/prototype-yaml';
+import { parseSchemaDocument } from '../../src/core/schema';
+import type { SchemaRoot } from '../../src/core/schema-contract';
+
+/**
+ * The real schema snapshot the CLI (issue #22) produced on `crystall-edge`,
+ * committed at `schema-cli/fixtures/metadata.json` — the same file the schema
+ * tests read.
+ */
+export function schemaSnapshot(): SchemaRoot {
+  const text = readFileSync(
+    fileURLToPath(new URL('../../schema-cli/fixtures/metadata.json', import.meta.url)),
+    'utf8',
+  );
+  const parsed = parseSchemaDocument(text);
+  if (!parsed.ok) throw new Error(`schema snapshot did not parse: ${parsed.reason}`);
+  return parsed.root;
+}
 
 /**
  * Real `crystall-edge` prototype files, copied 1:1 from

@@ -74,10 +74,13 @@ export type {
   RecordDiff,
   IndexLookup,
   IndexStatus,
+  PrototypeIndexView,
 } from './prototype-index';
 
 export { completionsAt } from './completion';
 export type { CompletionCandidate } from './completion';
+export { definitionAt } from './definition';
+export type { DefinitionTarget } from './definition';
 
 export {
   parsePrototypeFile,
