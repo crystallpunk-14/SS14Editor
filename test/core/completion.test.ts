@@ -220,6 +220,22 @@ describe.each([
     ]);
   });
 
+  it('offers values on an empty slot followed by the next component, not at the end of the file', () => {
+    // `yaml` ends the component's map before the caret, so a direct read lands
+    // on `components:` itself; the empty slot must still win.
+    const lines = [
+      '- type: entity',
+      '  id: X',
+      '  components:',
+      '  - type: MeleeWeapon',
+      '    swingLeft: ',
+      '  - type: Sprite',
+    ];
+    const text = lines.join(eol) + eol;
+    const offset = text.indexOf('swingLeft: ') + 'swingLeft: '.length;
+    expect(completionsAt(text, offset, SCHEMA).map((c) => c.label)).toEqual(['false', 'true']);
+  });
+
   it('returns [] when the document is unparseable and the line is not a key', () => {
     const { text, offset } = atEndOf(['- type: entity', '  id: X', '  : : broken']);
     expect(completionsAt(text, offset, SCHEMA)).toEqual([]);
@@ -375,6 +391,44 @@ describe('completionsAt — component registries other than `components`', () =>
  * whose whole domain is in the schema is served the same way — `boolean` is not
  * a special case bolted next to `enum`.
  */
+/**
+ * A dictionary key is data, not a field name — `events:` keys a
+ * `Dictionary<TimeSpan, List<CEEntityEffect>>` by time — so the chain steps over
+ * it into the dictionary's value type.
+ */
+describe('completionsAt — below a dictionary key', () => {
+  const animation = [
+    '- type: entityEffectAnimation',
+    '  id: X',
+    '  events:',
+    '    0:',
+    '    - !type:SpawnEntity',
+    '      spawns: []',
+  ];
+
+  function atEnd(lines: readonly string[]): { text: string; offset: number } {
+    const joined = lines.join('\n');
+    return { text: joined + '\n', offset: joined.length };
+  }
+
+  it('offers the tagged effect\'s fields', () => {
+    const { text, offset } = atEnd([...animation, '      ']);
+    const found = completionsAt(text, offset, SCHEMA).map((c) => c.label);
+    expect(found).toEqual(expect.arrayContaining(['effectTarget', 'reparent']));
+    expect(found).not.toContain('spawns'); // already written
+  });
+
+  it('offers enum members on a field value there', () => {
+    const { text, offset } = atEnd([...animation, '      effectTarget: ']);
+    expect(completionsAt(text, offset, SCHEMA).map((c) => c.label)).toContain('User');
+  });
+
+  it('offers no field names on the dictionary key itself', () => {
+    const { text, offset } = atEnd(['- type: entityEffectAnimation', '  id: X', '  events:', '    ']);
+    expect(completionsAt(text, offset, SCHEMA)).toEqual([]);
+  });
+});
+
 describe('completionsAt — values by field kind', () => {
   /** `lines` with the caret at the end of the last one. */
   function atEnd(lines: readonly string[]): { text: string; offset: number } {

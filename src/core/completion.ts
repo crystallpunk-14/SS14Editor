@@ -187,8 +187,12 @@ interface ResolvedCursor {
  * A caret line with no `:` is always a key-or-item in progress, so it is
  * rewritten even when the document happens to parse — that is the case `yaml`
  * silently reads as the previous line's scalar. A line that does have its `:`
- * only needs help when the direct read came back with nothing, which happens
- * when the caret sits in an empty value slot past the end of every node range.
+ * needs help when the caret sits in an empty value slot: past the end of every
+ * node range, the direct read comes back with nothing — or, when the next line
+ * starts another item of an enclosing sequence (`  - type: Sprite`), with the
+ * field that sequence belongs to, because `yaml` closes the caret's map before
+ * the caret. So an empty slot is always rewritten first, and the direct read
+ * only stands when the rewrite does not parse.
  */
 function resolveCursor(text: string, offset: number, schema: SchemaRoot): ResolvedCursor | null {
   const direct = parsePrototypeFile(text);
@@ -202,9 +206,7 @@ function resolveCursor(text: string, offset: number, schema: SchemaRoot): Resolv
         withTypeKey(text, offset, line),
         withSentinelKey(text, offset, line),
       ]
-    : directCtx === null || directCtx.token.kind === 'none'
-      ? [withValueSentinel(text, offset, line)]
-      : [];
+    : [withValueSentinel(text, offset, line)];
 
   for (const rewrite of rewrites) {
     if (!rewrite) continue;
@@ -228,12 +230,13 @@ function resolveCursor(text: string, offset: number, schema: SchemaRoot): Resolv
  * calls one `addComponents`, `antagSpecifier` declares two, and a registry is
  * just as legal on a component (`ComponentToggler.removeComponents`) or inside a
  * nested `[DataDefinition]` (`SlotDefinition.dependsOnComponents`) at any depth.
- * So the answer is the declared `fieldKind` of whatever field the chain lands
- * on — the same lookup the field candidates use, never a name match.
+ * So the answer is the declared kind of whatever slot the chain lands on — a
+ * field, or a dictionary entry — the same lookup the field candidates use,
+ * never a name match.
  */
 export function contextAt(file: PrototypeFile, offset: number, schema: SchemaRoot): CursorContext {
   return cursorContextAt(file, offset, {
-    isComponentRegistry: (site) => fieldAt(site, schema)?.fieldKind === COMPONENT_REGISTRY_KIND,
+    isComponentRegistry: (site) => slotAt(site, schema)?.node.kind === COMPONENT_REGISTRY_KIND,
   });
 }
 
@@ -349,7 +352,9 @@ function withTypeKey(text: string, offset: number, line: string): Rewrite | null
  * The caret sits in an empty value slot (`type: ` with nothing after it). That
  * offset is past the end of every node range, so a direct read finds no context
  * at all. Park a sentinel scalar in the slot to give the value a range the caret
- * falls inside; only its position is ever used.
+ * falls inside; only its position is ever used. A caret right against the colon
+ * (the `:` trigger fired) gets the space re-supplied: `parent:Base` is one
+ * scalar, not a key and a value.
  */
 function withValueSentinel(text: string, offset: number, line: string): Rewrite | null {
   const match = EMPTY_VALUE_SLOT.exec(line);
@@ -366,7 +371,7 @@ function withValueSentinel(text: string, offset: number, line: string): Rewrite 
     text: text.slice(0, start) + rewritten + text.slice(start + line.length),
     offset: start + upToColon.length + spacing.length,
     expect: ['component-type', 'value'],
-    insertPrefix: '',
+    insertPrefix: offset === start + upToColon.length ? ' ' : '',
   };
 }
 
@@ -452,20 +457,25 @@ function valueCandidates(
   index: PrototypeIndexView | undefined,
   insertPrefix: string,
 ): CompletionCandidate[] {
-  const refKind = protoRefKindAt(ctx, schema);
+  const slot = slotAt(ctx, schema);
+  if (!slot) return [];
+
+  const refKind = protoRefKind(slot, ctx.prototypeType);
   if (refKind !== null) return idCandidates(refKind, index, insertPrefix);
 
-  const field = fieldAt(ctx, schema);
-  if (!field) return [];
-
-  const { values, detail } = valueChoicesOf(field, schema);
-  return values.map((value) => ({ label: value, kind: 'value' as const, detail }));
+  const { values, detail } = valueChoicesOf(slot, schema);
+  return values.map((value) => ({
+    label: value,
+    kind: 'value' as const,
+    detail,
+    ...(insertPrefix ? { insertText: `${insertPrefix}${value}` } : {}),
+  }));
 }
 
 const BOOLEAN_VALUES = ['false', 'true'] as const;
 
 /**
- * The prototype kind a field's value names, or `null` when it names none:
+ * The prototype kind a slot's value names, or `null` when it names none:
  *
  *   - `parent:` (`isParent`) — the prototype's own kind: an entity inherits
  *     from entities, a reagent from reagents;
@@ -475,20 +485,19 @@ const BOOLEAN_VALUES = ['false', 'true'] as const;
  * A list is read through its element, so `List<EntProtoId>` and a `parent:`
  * list answer the same as a single value.
  */
-function protoRefKind(field: FieldMetadata, prototypeType: string | null): string | null {
-  if (field.isParent) return prototypeType;
+function protoRefKind(slot: Slot, prototypeType: string | null): string | null {
+  if (slot.field?.isParent) return prototypeType;
 
-  const element = field.fieldKind === 'list' ? field.element : undefined;
-  const kind = element ? element.kind : field.fieldKind;
-  if (kind === 'entityProtoId') return ENTITY_KIND;
-  if (kind === 'protoId') return (element ? element.protoTypeArg : field.protoTypeArg) ?? null;
+  const item = itemOf(slot.node);
+  if (item.kind === 'entityProtoId') return ENTITY_KIND;
+  if (item.kind === 'protoId') return item.protoTypeArg ?? null;
   return null;
 }
 
-/** {@link protoRefKind} of the field the caret's context lands on, or `null`. */
+/** {@link protoRefKind} of the slot the caret's context lands on, or `null`. */
 export function protoRefKindAt(ctx: CursorContext, schema: SchemaRoot): string | null {
-  const field = fieldAt(ctx, schema);
-  return field ? protoRefKind(field, ctx.prototypeType) : null;
+  const slot = slotAt(ctx, schema);
+  return slot ? protoRefKind(slot, ctx.prototypeType) : null;
 }
 
 /** The `type:` of `EntityPrototype` — what every `EntProtoId` names. */
@@ -521,22 +530,24 @@ function idCandidates(
 }
 
 /**
- * The listable domain of a field, read through its list `element` when the field
+ * The listable domain of a slot, read through its list `element` when the slot
  * is a sequence of such values. `detail` names the type the values come from.
  */
 function valueChoicesOf(
-  field: FieldMetadata,
+  slot: Slot,
   schema: SchemaRoot,
 ): { values: readonly string[]; detail: string | undefined } {
-  const kind = field.fieldKind === 'list' ? field.element?.kind : field.fieldKind;
+  const item = itemOf(slot.node);
 
-  if (kind === 'boolean') return { values: BOOLEAN_VALUES, detail: 'Boolean' };
-  if (kind !== 'enum' && kind !== 'flags') return { values: [], detail: undefined };
+  if (item.kind === 'boolean') return { values: BOOLEAN_VALUES, detail: 'Boolean' };
+  if (item.kind !== 'enum' && item.kind !== 'flags') return { values: [], detail: undefined };
 
-  const inline = field.enumValues ?? field.element?.enumValues;
-  if (inline && inline.length > 0) return { values: [...inline], detail: field.type };
+  const inline = item.enumValues;
+  if (inline && inline.length > 0) {
+    return { values: [...inline], detail: slot.field?.type ?? shortTypeName(item.fullType ?? '') };
+  }
 
-  const ref = field.enumRef ?? field.element?.enumRef;
+  const ref = item.enumRef;
   if (ref) {
     const detail = shortTypeName(ref);
     if (schema.enums[ref]) return { values: [...schema.enums[ref]], detail };
@@ -564,37 +575,105 @@ interface FieldRef {
   readonly fieldTags: readonly (string | null)[];
 }
 
-/** Metadata of the field `ref`'s last key names, or `null` when the chain does not resolve. */
-export function fieldAt(ref: FieldRef, schema: SchemaRoot): FieldMetadata | null {
-  const container = containerFields(ref, schema);
-  if (!container || ref.fieldPath.length === 0) return null;
+/**
+ * One level of a declared type, whether it is a whole field or a node inside one
+ * (a list's element, a dictionary's value). A field carries its kind as
+ * `fieldKind`; {@link nodeOf} lifts it into this shape.
+ */
+type TypeNode = Omit<FieldTypeNode, 'tupleElements' | 'key'>;
 
-  const leafKey = ref.fieldPath[ref.fieldPath.length - 1];
-  return container.find((candidate) => candidate.tag === leafKey) ?? null;
+function nodeOf(field: FieldMetadata): TypeNode {
+  return { ...field, kind: field.fieldKind };
+}
+
+/** A list's (or nested list's) item type; any other node is its own item. */
+function itemOf(node: TypeNode): TypeNode {
+  let item = node;
+  while (item.kind === 'list' && item.element) item = item.element;
+  return item;
+}
+
+/** `FieldTypeNode.kind` the CLI emits for a dictionary. */
+const DICTIONARY_KIND = 'map';
+
+/**
+ * What one key of the chain names: a declared field — or, below a dictionary,
+ * one of its entries, whose key is data and whose type is the dictionary's value
+ * type. `field` is `null` for such an entry.
+ */
+interface Slot {
+  readonly field: FieldMetadata | null;
+  readonly node: TypeNode;
+}
+
+/**
+ * Where the chain walk stands between two keys: in a field list (a component, a
+ * prototype or a `[DataDefinition]`), where the next key is a field name; or
+ * inside a dictionary, where the next key is an entry's key.
+ */
+type Scope =
+  | { readonly fields: readonly FieldMetadata[] }
+  | { readonly dictionary: TypeNode };
+
+/** The slot `ref`'s last key names, or `null` when the chain does not resolve. */
+function slotAt(ref: FieldRef, schema: SchemaRoot): Slot | null {
+  if (ref.fieldPath.length === 0) return null;
+  const scope = scopeAt(ref, schema);
+  return scope ? slotIn(scope, ref.fieldPath[ref.fieldPath.length - 1]) : null;
 }
 
 /**
  * The field list the caret's key chain lands in: a component's own fields, a
  * prototype's `[Prototype]`-type fields, or — for a deeper chain — the fields of
  * the `[DataDefinition]` each step's key is typed as. `null` when the schema
- * does not know the component / prototype type, or a step is not a
- * DataDefinition-typed field (a plain scalar, list or dictionary has no fixed
- * sub-fields to complete).
+ * does not know the component / prototype type, a step is not DataDefinition-
+ * typed (a plain scalar or list has no fixed sub-fields to complete), or the
+ * caret's key is a dictionary key, which is data, not a field name.
  */
 function containerFields(ref: FieldRef, schema: SchemaRoot): readonly FieldMetadata[] | null {
-  let fields = rootFieldsFor(ref, schema);
-  if (!fields) return null;
+  const scope = scopeAt(ref, schema);
+  return scope && 'fields' in scope ? scope.fields : null;
+}
 
-  // fieldPath ends with the (possibly partial) key under the caret; the keys
-  // before it name the container chain to walk into.
+/**
+ * The scope the chain's last key sits in. `fieldPath` ends with the (possibly
+ * partial) key under the caret; the keys before it name the containers to walk
+ * into — fields, and the entry keys of any dictionaries on the way.
+ */
+function scopeAt(ref: FieldRef, schema: SchemaRoot): Scope | null {
+  const root = rootFieldsFor(ref, schema);
+  if (!root) return null;
+
+  let scope: Scope = { fields: root };
   for (let step = 0; step < ref.fieldPath.length - 1; step++) {
-    const field = fields.find((candidate) => candidate.tag === ref.fieldPath[step]);
-    if (!field) return null;
-    const definition = definitionOf(field, ref.fieldTags[step] ?? null, schema);
-    if (!definition) return null;
-    fields = definition.fields;
+    const slot = slotIn(scope, ref.fieldPath[step]);
+    if (!slot) return null;
+    const inner = scopeUnder(slot.node, ref.fieldTags[step] ?? null, schema);
+    if (!inner) return null;
+    scope = inner;
   }
-  return fields;
+  return scope;
+}
+
+function slotIn(scope: Scope, key: string): Slot | null {
+  if ('dictionary' in scope) {
+    const value = scope.dictionary.value;
+    return value ? { field: null, node: value } : null;
+  }
+  const field = scope.fields.find((candidate) => candidate.tag === key);
+  return field ? { field, node: nodeOf(field) } : null;
+}
+
+/**
+ * The scope a slot's value opens: a dictionary's entries, or the fields of the
+ * `[DataDefinition]` it (or its list item) is typed as. `null` for anything
+ * with no keys of its own.
+ */
+function scopeUnder(node: TypeNode, tag: string | null, schema: SchemaRoot): Scope | null {
+  const item = itemOf(node);
+  if (item.kind === DICTIONARY_KIND) return { dictionary: item };
+  const definition = definitionOf(item, tag, schema);
+  return definition ? { fields: definition.fields } : null;
 }
 
 /**
@@ -614,38 +693,22 @@ function rootFieldsFor(ref: FieldRef, schema: SchemaRoot): readonly FieldMetadat
 }
 
 /**
- * The `[DataDefinition]` one step of a key chain descends into: what the field
- * (or its list element / dictionary value) is declared as — or, when the YAML
- * node carries a `!type:` tag, the concrete member of the union that tag names.
- * The declared type stays the fallback: it is the abstract base, whose fields
- * are the part every member shares.
+ * The `[DataDefinition]` one step of a key chain descends into: what the item
+ * type is declared as — or, when the YAML node carries a `!type:` tag, the
+ * concrete member of the union that tag names. The declared type stays the
+ * fallback: it is the abstract base, whose fields are the part every member
+ * shares.
  */
 function definitionOf(
-  field: FieldMetadata,
+  item: TypeNode,
   tag: string | null,
   schema: SchemaRoot,
 ): DataDefinitionMetadata | null {
-  const tagged = tag ? taggedDefinition(tag, declaredTypeName(field), schema) : null;
+  const tagged = tag ? taggedDefinition(tag, item.fullType, schema) : null;
   if (tagged) return tagged;
 
-  const typeName =
-    dataDefinitionTypeName(field) ??
-    dataDefinitionTypeName(field.element) ??
-    dataDefinitionTypeName(field.value);
-  if (!typeName) return null;
-  return schema.dataDefinitions[typeName] ?? null;
-}
-
-function dataDefinitionTypeName(
-  node: Pick<FieldTypeNode, 'isDataDefinition' | 'dataDefinitionType'> | undefined,
-): string | undefined {
-  if (!node) return undefined;
-  return node.isDataDefinition && node.dataDefinitionType ? node.dataDefinitionType : undefined;
-}
-
-/** Full type name declared at this step — the union a `!type:` tag is scoped to. */
-function declaredTypeName(field: FieldMetadata): string | undefined {
-  return field.element?.fullType ?? field.value?.fullType ?? field.fullType;
+  if (!item.isDataDefinition || !item.dataDefinitionType) return null;
+  return schema.dataDefinitions[item.dataDefinitionType] ?? null;
 }
 
 /** `!type:Foo` — how the engine writes "this member of the union" in YAML. */

@@ -112,6 +112,12 @@ describe('completionsAt — prototype ids, filtered by the field\'s target kind'
     expect(candidates.find((c) => c.label === 'FireAxe')).toEqual({ label: 'FireAxe', kind: 'id', detail: 'entity' });
   });
 
+  it('re-supplies the space when the caret sits right against the colon', () => {
+    const { text, offset } = atEnd(['- type: entity', '  id: X', '  parent:']);
+    const candidates = completionsAt(text, offset, SCHEMA, INDEX);
+    expect(candidates.find((c) => c.label === 'FireAxe')?.insertText).toBe(' FireAxe');
+  });
+
   it('lists a duplicated id once', () => {
     const index = new PrototypeIndex();
     index.replaceAll([
@@ -176,6 +182,35 @@ describe('completionsAt — prototype ids, filtered by the field\'s target kind'
   it('returns [] without an index', () => {
     const { text, offset } = atEnd(['- type: entity', '  id: X', '  parent: ']);
     expect(completionsAt(text, offset, SCHEMA)).toEqual([]);
+  });
+});
+
+/**
+ * A dictionary's keys are data, not field names: `events: { 0: [...] }` keys a
+ * `Dictionary<TimeSpan, List<CEEntityEffect>>` by time. The chain walk must step
+ * over such a key into the dictionary's value type, so an id nested below it is
+ * found the same way as one on the prototype map.
+ */
+describe('prototype ids below a dictionary key', () => {
+  const animation = [
+    '- type: entityEffectAnimation',
+    '  id: X',
+    '  events:',
+    '    0:',
+    '    - !type:SpawnEntity',
+    '      effectTarget: User',
+    '      spawns:',
+    '      - FireAxe',
+  ];
+
+  it('targets an `EntProtoId` list item inside a tagged effect', () => {
+    const { text, offset } = after(animation, '      - Fire');
+    expect(definitionAt(text, offset, SCHEMA, INDEX)?.target.id).toBe('FireAxe');
+  });
+
+  it('offers entities on a bare `- ` item there', () => {
+    const { text, offset } = atEnd([...animation, '      - ']);
+    expect(labels(text, offset)).toEqual(ALL_ENTITIES);
   });
 });
 
