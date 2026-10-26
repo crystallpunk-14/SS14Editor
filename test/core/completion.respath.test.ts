@@ -71,9 +71,9 @@ describe('completionsAt — ResPath fields list the directory the prefix names',
 
     const candidates = completionsAt(text, offset, SCHEMA, undefined, resources());
 
-    expect(candidates.map((c) => [c.label, c.kind, c.insertText])).toEqual([
-      ['Shuttles', 'folder', 'Shuttles/'],
-      ['box.yml', 'file', 'box.yml'],
+    expect(candidates.map((c) => [c.label, c.kind, c.insertText, c.continues])).toEqual([
+      ['Shuttles', 'folder', 'Shuttles/', true],
+      ['box.yml', 'file', 'box.yml', undefined],
     ]);
   });
 

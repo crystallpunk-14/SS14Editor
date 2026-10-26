@@ -158,6 +158,20 @@ describe.each([
     expect(candidates.every((c) => c.insertText === `${c.label}: `)).toBe(true);
   });
 
+  it('marks a field key that writes its colon as continuing onto the value slot', () => {
+    const { text, offset } = atEndOf([...meleeBlock, '    swingL']);
+
+    const swingLeft = completionsAt(text, offset, SCHEMA).find((c) => c.label === 'swingLeft');
+    expect(swingLeft?.continues).toBe(true);
+  });
+
+  it('does not mark a key whose colon is already written', () => {
+    const file = parsedFixture('fireaxe.yml');
+    const offset = file.text.indexOf('swingLeft: true') + 'swing'.length;
+
+    expect(completionsAt(file.text, offset, SCHEMA).some((c) => c.continues)).toBe(false);
+  });
+
   it('offers prototype fields on a blank line at the top level', () => {
     const { text, offset } = atEndOf(['- type: reagent', '  id: X', '  ']);
 

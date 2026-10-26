@@ -62,6 +62,7 @@ export function resourcePathCandidates(
       // Filtered against the segment being typed, not the `/` the insert may add.
       filterText: entry.name,
       range,
+      ...(entry.isDirectory ? { continues: true as const } : {}),
     }))
     .sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
 }

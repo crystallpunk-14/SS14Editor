@@ -121,6 +121,13 @@ export interface CompletionCandidate {
    * nor {@link label} — a path entry whose insert also writes a `/`.
    */
   readonly filterText?: string;
+  /**
+   * Picking it leaves the caret on the next completion point — a field key that
+   * wrote its colon lands on the value slot, a directory on its next segment —
+   * so the host reopens the list there. VS Code opens it on typing, never after
+   * a completion is accepted.
+   */
+  readonly continues?: true;
 }
 
 /**
@@ -586,7 +593,7 @@ function fieldKeyCandidates(
       detail: fieldDetail(field),
       // The caret line has no `:` yet, so carry one in the insert text and leave
       // the caret on the value slot after it.
-      ...(needsColon ? { insertText: `${field.tag}: ` } : {}),
+      ...(needsColon ? { insertText: `${field.tag}: `, continues: true as const } : {}),
     }))
     .sort(byLabel);
 }
@@ -609,7 +616,9 @@ function dictionaryKeyCandidates(
   const alreadyPresent = siblingKeys(ctx);
   return slotCandidates(slot, ctx, schema, index, '')
     .filter((candidate) => !alreadyPresent.has(candidate.label))
-    .map((candidate) => (needsColon ? { ...candidate, insertText: `${candidate.label}: ` } : candidate));
+    .map((candidate) =>
+      needsColon ? { ...candidate, insertText: `${candidate.label}: `, continues: true as const } : candidate,
+    );
 }
 
 /** Keys already written beside the caret's key, which a key completion must not offer again. */

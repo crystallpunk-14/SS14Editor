@@ -98,6 +98,15 @@ export class TextProviderController implements vscode.Disposable {
       ),
       vscode.languages.registerHoverProvider(selector, new PrototypeHoverProvider(getSchema)),
       triggerSuggestOnEdit(selector, getSchema, this.prototypeIndex, resources),
+      vscode.commands.registerCommand(SUGGEST_IF_ANY_COMMAND, () => {
+        const editor = vscode.window.activeTextEditor;
+        const schema = getSchema();
+        if (!editor || !schema || vscode.languages.match(selector, editor.document) === 0) return;
+        const offset = editor.document.offsetAt(editor.selection.active);
+        if (completionsAt(editor.document.getText(), offset, schema, this.prototypeIndex, resources).length > 0) {
+          triggerSuggest();
+        }
+      }),
     );
   }
 
@@ -155,6 +164,14 @@ function triggerSuggestOnEdit(
 
 /** What Enter inserts: a line break and the new line's indentation, nothing else. */
 const NEW_LINE = /^\r?\n[ \t]*$/;
+
+/**
+ * Internal (not contributed): reopen the suggestion list at the caret, only
+ * where the core has something to offer — run after accepting a candidate that
+ * {@link CompletionCandidate.continues}, so an empty slot shows no "No
+ * suggestions" popup.
+ */
+const SUGGEST_IF_ANY_COMMAND = 'ss14editor.suggestIfAny';
 
 function triggerSuggest(): void {
   void vscode.commands.executeCommand('editor.action.triggerSuggest');
@@ -332,7 +349,6 @@ function toCompletionItem(document: vscode.TextDocument, candidate: CompletionCa
     item.filterText = candidate.insertText ?? candidate.label;
   }
   if (candidate.filterText) item.filterText = candidate.filterText;
-  // A picked directory leaves the path open for its next segment.
-  if (candidate.kind === 'folder') item.command = { title: 'Suggest', command: 'editor.action.triggerSuggest' };
+  if (candidate.continues) item.command = { title: 'Suggest', command: SUGGEST_IF_ANY_COMMAND };
   return item;
 }
