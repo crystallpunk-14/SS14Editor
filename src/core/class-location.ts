@@ -56,7 +56,7 @@ const BOM = 0xfeff;
  *
  * A lookup first reads only the files named after the class (`FooComponent.cs`,
  * and partial parts like `FooComponent.Server.cs`) — where SS14 keeps nearly
- * every component. Only when none of those declares it does it scan every file,
+ * every component — or, for a nested class, after its outermost one. Only when none of those declares it does it scan every file,
  * once; that scan is kept for later misses.
  */
 export class ClassLocator {
@@ -72,11 +72,11 @@ export class ClassLocator {
    * declared in the fork's sources, or they cannot be listed.
    */
   async locate(fullName: string): Promise<ClassLocation[]> {
-    const { namespace, name } = splitClassName(fullName);
+    const { namespace, name, outermost } = splitClassName(fullName);
     const files = await this.projectFiles();
     if (files.length === 0) return [];
 
-    const namedFiles = files.filter((path) => isNamedAfter(path, name));
+    const namedFiles = files.filter((path) => isNamedAfter(path, name) || isNamedAfter(path, outermost));
     const byFileName = await this.matchesIn(namedFiles, name, namespace);
     if (byFileName.length > 0) return byFileName;
 
@@ -124,14 +124,15 @@ export class ClassLocator {
   }
 }
 
-/** `A.B.Outer+Inner` -> namespace `A.B`, name `Inner`. */
-function splitClassName(fullName: string): { namespace: string | null; name: string } {
+/** `A.B.Outer+Inner` -> namespace `A.B`, name `Inner`, outermost class `Outer`. */
+function splitClassName(fullName: string): { namespace: string | null; name: string; outermost: string } {
   const plus = fullName.lastIndexOf('+');
   const outer = plus < 0 ? fullName : fullName.slice(0, fullName.indexOf('+'));
   const dot = outer.lastIndexOf('.');
   return {
     namespace: dot < 0 ? null : outer.slice(0, dot),
     name: plus < 0 ? fullName.slice(dot + 1) : fullName.slice(plus + 1),
+    outermost: outer.slice(dot + 1),
   };
 }
 

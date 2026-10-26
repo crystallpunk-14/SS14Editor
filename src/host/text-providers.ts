@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import {
   ClassLocator,
   completionsAt,
-  componentDefinitionAt,
+  classDefinitionAt,
   definitionAt,
   opensSuggestOnNewLine,
   reopensSuggestAfterDeletion,
@@ -33,7 +33,7 @@ import type { SchemaController } from './schema-controller';
  * Ctrl+Click and F12. Both also read the prototype index, which is consulted
  * per request rather than gating the registration: until it is ready, ids
  * simply have no candidates and no target. The same provider jumps from a
- * component name to its C# class (issue #31) through a {@link ClassLocator},
+ * component name or a `!type:` tag to its C# class (issue #31) through a {@link ClassLocator},
  * which caches what it reads until the next schema change. Hover (a later
  * ticket) registers here too.
  */
@@ -193,8 +193,8 @@ export class PrototypeCompletionProvider implements vscode.CompletionItemProvide
  * a range. Engine prototypes resolve the same way, into
  * `RobustToolbox/Resources/EnginePrototypes/`.
  *
- * On a component name it asks {@link componentDefinitionAt} for the class and
- * the {@link ClassLocator} for its declarations instead — one link per part of a
+ * On a component name or a `!type:` tag it asks {@link classDefinitionAt} for the
+ * class and the {@link ClassLocator} for its declarations instead — one link per part of a
  * partial class, so VS Code jumps straight to a single one and peeks several.
  */
 export class PrototypeDefinitionProvider implements vscode.DefinitionProvider {
@@ -221,13 +221,13 @@ export class PrototypeDefinitionProvider implements vscode.DefinitionProvider {
       return link && [link];
     }
 
-    const component = componentDefinitionAt(text, offset, schema);
-    if (!component) return undefined;
-    const locations = await this.getLocator().locate(component.className);
+    const named = classDefinitionAt(text, offset, schema);
+    if (!named) return undefined;
+    const locations = await this.getLocator().locate(named.className);
     const links = await Promise.all(
       locations.map((location) => {
         const name: [number, number] = [location.offset, location.offset + location.name.length];
-        return this.linkTo(document, component.origin, location.filePath, name, name);
+        return this.linkTo(document, named.origin, location.filePath, name, name);
       }),
     );
     const opened = links.filter((link) => link !== undefined);

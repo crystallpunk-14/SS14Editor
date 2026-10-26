@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { ClassLocator, classDeclarationsIn, type CsSourceTree } from '../../src/core/class-location';
-import { componentDefinitionAt } from '../../src/core/definition';
-import { schemaSnapshot } from './prototype-fixtures';
+import { classDefinitionAt } from '../../src/core/definition';
+import { parsedFixture, schemaSnapshot } from './prototype-fixtures';
 
 /**
- * Go-to-definition from a component name to its C# class (issue #31). The
+ * Go-to-definition from a component name or a `!type:` tag to its C# class
+ * (issue #31). The
  * locator runs over a fake fork's git-tracked `.cs` files; the cursor half reads
  * the committed crystall-edge schema snapshot for the component's class name.
  */
@@ -269,7 +270,74 @@ describe('ClassLocator — where a component class is declared in the fork', () 
   });
 });
 
-describe('componentDefinitionAt — the component name under the caret', () => {
+describe('ClassLocator — nested classes', () => {
+  it('finds a nested class in the file named after its outermost class', async () => {
+    const path = 'Content.Shared/Weapons/Ranged/Systems/SharedGunSystem.cs';
+    const text = [
+      'namespace Content.Shared.Weapons.Ranged.Systems;',
+      'public abstract partial class SharedGunSystem : EntitySystem',
+      '{',
+      '}',
+      'public sealed partial class CycleModeEvent : InstantActionEvent {}',
+    ].join('\n');
+    const source = tree({ [path]: text, 'Content.Shared/Other.cs': 'namespace Content.Shared;' });
+
+    const found = await new ClassLocator(source).locate('Content.Shared.Weapons.Ranged.Systems.SharedGunSystem+CycleModeEvent');
+
+    expect(found).toEqual([{ filePath: path, offset: text.indexOf('CycleModeEvent'), name: 'CycleModeEvent' }]);
+    expect(source.reads).toEqual([path]);
+  });
+});
+
+describe('classDefinitionAt — a `!type:` tag under the caret', () => {
+  const claw = parsedFixture('claw.yml');
+  const types = parsedFixture('types.yml');
+
+  /** `[start, end)` of the member name in the first `!type:<name>` of `text`. */
+  function nameSpan(text: string, name: string): [number, number] {
+    const start = text.indexOf(`!type:${name}`) + '!type:'.length;
+    return [start, start + name.length];
+  }
+
+  it("names the union member a list item's tag picks, spanning the name only", () => {
+    const [start, end] = nameSpan(claw.text, 'WeaponArcAttack');
+
+    expect(classDefinitionAt(claw.text, start + 3, SCHEMA)).toEqual({
+      origin: [start, end],
+      className: 'Content.Shared._CE.EntityEffect.Effects.WeaponArcAttack',
+    });
+  });
+
+  it('resolves with the caret on the `!type:` prefix too', () => {
+    const tag = claw.text.indexOf('!type:WeaponArcAttack');
+
+    expect(classDefinitionAt(claw.text, tag + 1, SCHEMA)?.className).toBe(
+      'Content.Shared._CE.EntityEffect.Effects.WeaponArcAttack',
+    );
+  });
+
+  it("names the member an `event:` field's tag picks", () => {
+    const [start] = nameSpan(types.text, 'ToggleActionEvent');
+
+    expect(classDefinitionAt(types.text, start, SCHEMA)?.className).toBe('Content.Shared.Toggleable.ToggleActionEvent');
+  });
+
+  it('has no target for a tag naming no member of the declared union', () => {
+    const at = claw.text.indexOf('!type:WeaponArcAttack');
+    const text = claw.text.slice(0, at) + '!type:NoSuchEffect' + claw.text.slice(at + '!type:WeaponArcAttack'.length);
+
+    expect(classDefinitionAt(text, at + '!type:No'.length, SCHEMA)).toBeNull();
+  });
+
+  it('has no target for an empty tag', () => {
+    const at = claw.text.indexOf('!type:WeaponArcAttack');
+    const text = claw.text.slice(0, at) + '!type:' + claw.text.slice(at + '!type:WeaponArcAttack'.length);
+
+    expect(classDefinitionAt(text, at + '!type:'.length, SCHEMA)).toBeNull();
+  });
+});
+
+describe('classDefinitionAt — the component name under the caret', () => {
   const TEXT = [
     '- type: entity',
     '  id: Thing',
@@ -285,7 +353,7 @@ describe('componentDefinitionAt — the component name under the caret', () => {
   it('names the class of a content component and spans the written name', () => {
     const offset = TEXT.indexOf('Damageable') + 3;
 
-    expect(componentDefinitionAt(TEXT, offset, SCHEMA)).toEqual({
+    expect(classDefinitionAt(TEXT, offset, SCHEMA)).toEqual({
       origin: [TEXT.indexOf('Damageable'), TEXT.indexOf('Damageable') + 'Damageable'.length],
       className: SCHEMA.components.Damageable.className,
     });
@@ -294,17 +362,17 @@ describe('componentDefinitionAt — the component name under the caret', () => {
   it('names the class of an engine component', () => {
     const offset = TEXT.indexOf('Transform');
 
-    expect(componentDefinitionAt(TEXT, offset, SCHEMA)?.className).toBe('Robust.Shared.GameObjects.TransformComponent');
+    expect(classDefinitionAt(TEXT, offset, SCHEMA)?.className).toBe('Robust.Shared.GameObjects.TransformComponent');
   });
 
   it('has no target for a component the schema does not know', () => {
     const offset = TEXT.indexOf('NoSuchComponentAnywhere') + 2;
 
-    expect(componentDefinitionAt(TEXT, offset, SCHEMA)).toBeNull();
+    expect(classDefinitionAt(TEXT, offset, SCHEMA)).toBeNull();
   });
 
   it('has no target off the component name', () => {
-    expect(componentDefinitionAt(TEXT, TEXT.indexOf('icon'), SCHEMA)).toBeNull();
-    expect(componentDefinitionAt(TEXT, TEXT.indexOf('entity'), SCHEMA)).toBeNull();
+    expect(classDefinitionAt(TEXT, TEXT.indexOf('icon'), SCHEMA)).toBeNull();
+    expect(classDefinitionAt(TEXT, TEXT.indexOf('entity'), SCHEMA)).toBeNull();
   });
 });

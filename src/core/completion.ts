@@ -754,6 +754,27 @@ function polymorphicBaseOf(slot: Slot | null, schema: SchemaRoot, throughList: b
 }
 
 /**
+ * The full name of the union member a written `!type:` tag picks — the member of
+ * the slot's declared base whose short name the tag spells (go-to-definition,
+ * issue #31). `null` off a tag, on an empty one, outside a polymorphic slot, or
+ * for a name the base has no member by. A nested member matches by its own name
+ * (`CycleModeEvent`) as well as with its outer class (`SharedGunSystem+CycleModeEvent`).
+ */
+export function typeTagMemberAt(ctx: CursorContext, schema: SchemaRoot): string | null {
+  if (ctx.token.kind !== 'type-tag' || ctx.token.text === null) return null;
+  const base = polymorphicBaseOf(slotAt(ctx, schema), schema, true);
+  if (!base) return null;
+
+  const name = ctx.token.text;
+  return (
+    schema.polymorphicTypes[base].find((member) => {
+      const short = shortTypeName(member);
+      return short === name || short.slice(short.lastIndexOf('+') + 1) === name;
+    }) ?? null
+  );
+}
+
+/**
  * The concrete members of `base` as `!type:` candidates: the short class name the
  * engine resolves the tag by, the full name as its signature. The CLI lists only
  * non-abstract implementors, so every one is a legal pick. Each inserts the

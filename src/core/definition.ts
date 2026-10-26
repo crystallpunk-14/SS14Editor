@@ -13,7 +13,7 @@
  * field has no target.
  */
 
-import { contextAt, protoRefKindAt } from './completion';
+import { contextAt, protoRefKindAt, typeTagMemberAt } from './completion';
 import type { PrototypeIndexView, PrototypeRecord } from './prototype-index';
 import { parsePrototypeFile } from './prototype-yaml';
 import type { SchemaRoot } from './schema-contract';
@@ -52,27 +52,37 @@ export function definitionAt(
   return lookup.ready && lookup.record ? { origin, target: lookup.record } : null;
 }
 
-/** A component class to jump to, and which text it was asked from. */
-export interface ComponentDefinition {
-  /** `[start, end)` of the component name under the caret. */
+/** A C# class to jump to, and which text it was asked from. */
+export interface ClassDefinition {
+  /** `[start, end)` of the name under the caret — a component name, or a tag's member name. */
   readonly origin: readonly [number, number];
-  /** The component's full C# class name, from the schema — for `ClassLocator.locate`. */
+  /** The class's full C# name, from the schema — for `ClassLocator.locate`. */
   readonly className: string;
 }
 
 /**
- * The class of the component named under the caret — the value of a
- * component-registry entry's `type:` (issue #31). `null` off such a name, or for
- * a name the schema does not know. Where that class is declared is the
- * `ClassLocator`'s question (./class-location.ts), asked by the host.
+ * The C# class named under the caret (issue #31): a component — the value of a
+ * component-registry entry's `type:` — or the union member a `!type:` tag picks.
+ * `null` off both, or for a name the schema does not know there. Where that
+ * class is declared is the `ClassLocator`'s question (./class-location.ts),
+ * asked by the host.
  */
-export function componentDefinitionAt(text: string, offset: number, schema: SchemaRoot): ComponentDefinition | null {
+export function classDefinitionAt(text: string, offset: number, schema: SchemaRoot): ClassDefinition | null {
   const file = parsePrototypeFile(text);
   if (!file.ok) return null;
 
-  const { token } = contextAt(file, offset, schema);
-  if (token.kind !== 'component-type' || token.text === null) return null;
+  const ctx = contextAt(file, offset, schema);
+  const { token } = ctx;
 
+  if (token.kind === 'type-tag') {
+    const member = typeTagMemberAt(ctx, schema);
+    if (!member || token.text === null) return null;
+    // The name ends the tag: `!type:<name>`.
+    const end = token.range[1];
+    return { origin: [end - token.text.length, end], className: member };
+  }
+
+  if (token.kind !== 'component-type' || token.text === null) return null;
   const component = Object.hasOwn(schema.components, token.text) ? schema.components[token.text] : undefined;
   if (!component) return null;
 
