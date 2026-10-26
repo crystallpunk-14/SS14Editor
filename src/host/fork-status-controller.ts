@@ -20,9 +20,9 @@ const REFRESH_DEBOUNCE_MS = 300;
  */
 export class ForkStatusController implements vscode.Disposable {
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
-  private currentFolder: ForkFolderStatus | null = null;
+  /** `undefined` until the first detection, so that first verdict is always logged. */
+  private currentFolder: ForkFolderStatus | null | undefined = undefined;
   private currentFolderUri: vscode.Uri | undefined;
-  private detected = false;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly changeEmitter = new vscode.EventEmitter<ForkFolderStatus | null>();
 
@@ -67,7 +67,7 @@ export class ForkStatusController implements vscode.Disposable {
 
   private refresh(): void {
     this.detect();
-    this.changeEmitter.fire(this.currentFolder);
+    this.changeEmitter.fire(this.currentFolder ?? null);
   }
 
   /**
@@ -76,16 +76,16 @@ export class ForkStatusController implements vscode.Disposable {
    * changed. Multi-root and nested forks are out of scope (spec #20).
    */
   private detect(): void {
-    const previous = this.detected ? this.currentFolder : undefined;
+    const previous = this.currentFolder;
     const folder = (vscode.workspace.workspaceFolders ?? []).find(
       (candidate) => candidate.uri.scheme === 'file',
     );
     this.currentFolderUri = folder?.uri;
-    this.currentFolder = folder
+    const next = folder
       ? { name: folder.name, status: detectFork(createForkFs(folder.uri.fsPath)) }
       : null;
-    this.detected = true;
-    for (const line of forkStatusLog(previous, this.currentFolder)) this.log.appendLine(line);
+    for (const line of forkStatusLog(previous, next)) this.log.appendLine(line);
+    this.currentFolder = next;
   }
 
   dispose(): void {

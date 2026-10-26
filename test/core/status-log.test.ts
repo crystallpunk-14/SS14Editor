@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ForkFolderStatus } from '../../src/core/fork-detection';
 import { indexBuilding, indexFailed, indexReady } from '../../src/core/prototype-index';
-import type { SchemaStatus } from '../../src/core/schema';
+import { interpretSchemaResult, type SchemaStatus } from '../../src/core/schema';
 import { forkStatusLog, indexStatusLog, schemaStatusLog } from '../../src/core/status-log';
 
 const recognized: ForkFolderStatus = { name: 'crystall-edge', status: { recognized: true } };
@@ -77,16 +77,17 @@ describe('schemaStatusLog', () => {
     expect(schemaStatusLog(loaded, dotnetMissing)).toEqual(['[schema] `dotnet` was not found on PATH.']);
   });
 
-  it('adds the extractor stderr under a failed extraction', () => {
-    const failed: SchemaStatus = {
-      state: 'extraction-failed',
-      message: 'The schema extractor failed (exit code 1).',
-      stderr: 'Unhandled exception.\n   at Program.Main()',
-    };
+  it('prefixes every line of a multi-line verdict, without repeating the stderr it embeds', () => {
+    const failed = interpretSchemaResult({
+      run: { kind: 'exited', code: 1, stderr: 'Unhandled exception.\n   at Program.Main()' },
+      parse: undefined,
+      sidecarFingerprint: undefined,
+      expectedVersion: 1,
+    });
     expect(schemaStatusLog(undefined, failed)).toEqual([
-      '[schema] The schema extractor failed (exit code 1).',
-      '[schema]   Unhandled exception.',
-      '[schema]      at Program.Main()',
+      '[schema] Schema extraction failed:',
+      '[schema] Unhandled exception.',
+      '[schema]    at Program.Main()',
     ]);
   });
 
@@ -108,20 +109,19 @@ describe('indexStatusLog', () => {
     expect(indexStatusLog(indexBuilding(40, 2767), indexBuilding(80, 2767))).toEqual([]);
   });
 
-  it('logs the result of a build', () => {
-    expect(indexStatusLog(indexBuilding(2767, 2767), indexReady(25200, 0))).toEqual([
-      '[index] Prototype index: 25200 prototypes.',
-    ]);
+  it('logs a failed build', () => {
     expect(indexStatusLog(indexBuilding(10, 2767), indexFailed('out of memory'))).toEqual([
       '[index] Prototype index failed: out of memory',
     ]);
   });
 
-  it('logs an incremental update only when the count moves', () => {
-    expect(indexStatusLog(indexReady(25200, 0), indexReady(25200, 0))).toEqual([]);
-    expect(indexStatusLog(indexReady(25200, 0), indexReady(25201, 0))).toEqual([
-      '[index] Prototype index: 25201 prototypes.',
-    ]);
+  it('leaves a ready index to the controller, whose load and per-file lines say more', () => {
+    expect(indexStatusLog(indexBuilding(2767, 2767), indexReady(25200, 0))).toEqual([]);
+    expect(indexStatusLog(indexReady(25200, 0), indexReady(25201, 0))).toEqual([]);
+  });
+
+  it('logs the start of a rebuild after the index was ready', () => {
+    expect(indexStatusLog(indexReady(25200, 0), indexBuilding(0, 0))).toEqual(['[index] Indexing prototypes…']);
   });
 
   it('stays silent when the index is torn down', () => {

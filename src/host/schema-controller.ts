@@ -147,6 +147,9 @@ export class SchemaController implements vscode.Disposable {
       this.setStatus(null);
       return;
     }
+    // Only a first extraction is worth announcing: a cold run can take a while,
+    // whereas re-runs after DLL changes usually no-op in tens of milliseconds.
+    if (this.status == null) this.log.appendLine('[schema] Extracting schema from the fork build…');
 
     const cacheDir = vscode.Uri.joinPath(
       this.context.globalStorageUri,
