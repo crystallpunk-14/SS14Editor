@@ -28,7 +28,9 @@ export const initialState: ViewState = {
 };
 
 export function render(root: HTMLElement, state: ViewState): void {
-  const lines = [statusText(state), indexText(state)].filter((line): line is string => line !== null);
+  const lines = [statusText(state), staleText(state), indexText(state)].filter(
+    (line): line is string => line !== null,
+  );
   root.replaceChildren(
     ...lines.map((line) => {
       const div = document.createElement('div');
@@ -49,6 +51,15 @@ function statusText(state: ViewState): string {
   if (!folder.status.recognized) return folder.status.message;
   if (schema === null) return '✓ SS14 fork recognized. Extracting schema…';
   return schema.message;
+}
+
+/**
+ * The stale-build warning: the fork still works off its last build, so this sits
+ * beside the schema line instead of replacing it.
+ */
+function staleText(state: ViewState): string | null {
+  const status = state.folder?.status;
+  return status?.recognized && status.stale ? status.stale.message : null;
 }
 
 /** The prototype index's own line (issue #28), under the fork/schema line. */

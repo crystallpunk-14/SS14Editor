@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import {
   completionsAt,
   definitionAt,
+  opensSuggestOnNewLine,
   reopensSuggestAfterDeletion,
   type CompletionCandidate,
   type PrototypeIndexView,
@@ -72,7 +73,7 @@ export class TextProviderController implements vscode.Disposable {
         selector,
         new PrototypeDefinitionProvider(getSchema, this.prototypeIndex, root.uri),
       ),
-      reopenSuggestOnDeletion(selector, getSchema, this.prototypeIndex),
+      triggerSuggestOnEdit(selector, getSchema, this.prototypeIndex),
     );
   }
 
@@ -86,12 +87,14 @@ export class TextProviderController implements vscode.Disposable {
 const UNDO_OR_REDO = new Set([1, 2]);
 
 /**
- * VS Code opens the suggestion list on typing but never on Backspace, so going
- * back into a wrong value and deleting part of it shows nothing until the next
- * letter. After a plain deletion in the active prototype editor, reopen the list
- * where {@link reopensSuggestAfterDeletion} says there is something to offer.
+ * VS Code opens the suggestion list on typing, but never on Backspace or Enter:
+ * going back into a wrong value and deleting part of it shows nothing until the
+ * next letter, and neither does the fresh line after a finished `field: value`.
+ * After either edit in the active prototype editor, open the list where the
+ * core ({@link reopensSuggestAfterDeletion}, {@link opensSuggestOnNewLine}) says
+ * there is something to offer.
  */
-function reopenSuggestOnDeletion(
+function triggerSuggestOnEdit(
   selector: vscode.DocumentSelector,
   getSchema: () => SchemaRoot | null,
   index: PrototypeIndexView,
@@ -101,17 +104,35 @@ function reopenSuggestOnDeletion(
     if (editor?.document !== event.document || vscode.languages.match(selector, event.document) === 0) return;
     if (UNDO_OR_REDO.has((event as { reason?: number }).reason ?? 0)) return;
 
-    const [change, ...more] = event.contentChanges;
-    if (!change || more.length > 0 || change.text !== '' || change.rangeLength === 0) return;
-
+    const changes = event.contentChanges;
     const schema = getSchema();
-    if (!schema) return;
-    // A deletion leaves the caret where the removed range started.
-    const offset = event.document.offsetAt(change.range.start);
-    if (reopensSuggestAfterDeletion(event.document.getText(), offset, schema, index)) {
-      void vscode.commands.executeCommand('editor.action.triggerSuggest');
+    if (!schema || changes.length === 0) return;
+
+    const [only] = changes;
+    if (changes.length === 1 && only.text === '' && only.rangeLength > 0) {
+      // A deletion leaves the caret where the removed range started.
+      const offset = event.document.offsetAt(only.range.start);
+      if (reopensSuggestAfterDeletion(event.document.getText(), offset, schema, index)) triggerSuggest();
+      return;
     }
+
+    // Enter arrives as a newline plus auto-indent — sometimes alongside a
+    // second change trimming the whitespace it left on the line above, so the
+    // caret is read once the editor has settled rather than from the offsets.
+    if (!changes.some((change) => NEW_LINE.test(change.text))) return;
+    setTimeout(() => {
+      if (vscode.window.activeTextEditor !== editor || editor.selections.length !== 1) return;
+      const offset = editor.document.offsetAt(editor.selection.active);
+      if (opensSuggestOnNewLine(editor.document.getText(), offset, schema, index)) triggerSuggest();
+    }, 0);
   });
+}
+
+/** What Enter inserts: a line break and the new line's indentation, nothing else. */
+const NEW_LINE = /^\r?\n[ \t]*$/;
+
+function triggerSuggest(): void {
+  void vscode.commands.executeCommand('editor.action.triggerSuggest');
 }
 
 /** YAML prototype files of one fork — the selector every schema-aware provider shares. */

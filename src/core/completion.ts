@@ -179,6 +179,23 @@ export function reopensSuggestAfterDeletion(
   return completionsAt(text, offset, schema, index).length > 0;
 }
 
+/**
+ * Whether the host should open the suggestion list after Enter left the caret at
+ * `offset`. VS Code opens it on typing, never on a new line, so after finishing
+ * `field: value` the next field had to be started by hand before anything
+ * showed. Opens only on a line that is still blank — Enter that split a line
+ * leaves text there — and only where there is something to offer.
+ */
+export function opensSuggestOnNewLine(
+  text: string,
+  offset: number,
+  schema: SchemaRoot,
+  index?: PrototypeIndexView,
+): boolean {
+  if (!BLANK_LINE.test(lineAround(text, offset))) return false;
+  return completionsAt(text, offset, schema, index).length > 0;
+}
+
 /** A line that ends in the middle of a word — not on whitespace, `:` or `-`. */
 const PARTIAL_WORD = /[^\s:\-#,[\]{}'"]$/;
 

@@ -29,6 +29,7 @@ export type {
   ForkStatus,
   ForkRecognized,
   ForkUnrecognized,
+  StaleBuild,
   ForkProblemCode,
 } from './fork-detection';
 
@@ -77,7 +78,7 @@ export type {
   PrototypeIndexView,
 } from './prototype-index';
 
-export { completionsAt, reopensSuggestAfterDeletion } from './completion';
+export { completionsAt, opensSuggestOnNewLine, reopensSuggestAfterDeletion } from './completion';
 export type { CompletionCandidate } from './completion';
 export { definitionAt } from './definition';
 export type { DefinitionTarget } from './definition';

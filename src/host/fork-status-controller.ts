@@ -13,7 +13,7 @@ const REFRESH_DEBOUNCE_MS = 300;
  * The panel is a persistent `WebviewView`, so the webview document is destroyed
  * whenever the view is hidden and rebuilt when shown; the controller re-pushes
  * on `onDidChangeVisibility`. It also re-runs detection when the workspace
- * folders change or the built DLLs change on disk, so a "build is stale" verdict
+ * folders change or the built DLLs change on disk, so a "build is stale" warning
  * clears after a rebuild without a window reload (spec #20, "Инвалидация").
  *
  * Issue #25 makes the verdict observable: {@link onDidChange} fires on every
@@ -53,7 +53,8 @@ export class ForkStatusController implements vscode.Disposable {
 
   /**
    * The workspace-folder root when — and only when — the current verdict is a
-   * recognised, freshly-built fork. Bundles the name and URI the schema
+   * recognised fork. A stale build counts: its DLLs are the last good build,
+   * and the schema and index keep working off them. Bundles the name and URI the schema
    * controller needs so callers never re-check `.recognized` themselves.
    */
   recognizedRoot(): { readonly name: string; readonly uri: vscode.Uri } | undefined {

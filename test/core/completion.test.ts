@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { completionsAt, reopensSuggestAfterDeletion } from '../../src/core/completion';
+import { completionsAt, opensSuggestOnNewLine, reopensSuggestAfterDeletion } from '../../src/core/completion';
 import { parsedFixture, schemaSnapshot } from './prototype-fixtures';
 
 /** Candidate assertions below name components/fields/enums present in the snapshot. */
@@ -866,5 +866,35 @@ describe('completionsAt — blank line in a list of union members (#43)', () => 
     const candidates = completionsAt(text, at + '      '.length, SCHEMA);
 
     expect(candidates.some((c) => c.kind === 'type')).toBe(false);
+  });
+});
+
+describe('opensSuggestOnNewLine', () => {
+  const fireaxe = parsedFixture('fireaxe.yml');
+
+  /** fireaxe.yml with Enter pressed at the end of `after`'s line, auto-indented by `indent`. */
+  function enterAfter(after: string, indent: string): { text: string; offset: number } {
+    const at = fireaxe.text.indexOf(after) + after.length;
+    const inserted = `\r\n${indent}`;
+    return { text: fireaxe.text.slice(0, at) + inserted + fireaxe.text.slice(at), offset: at + inserted.length };
+  }
+
+  it('opens the field list on the new line after a finished `field: value` line', () => {
+    const { text, offset } = enterAfter('swingLeft: true', '    ');
+
+    expect(opensSuggestOnNewLine(text, offset, SCHEMA)).toBe(true);
+    expect(completionsAt(text, offset, SCHEMA).map((c) => c.label)).toContain('range');
+  });
+
+  it('stays closed when Enter split a line, leaving text on the caret line', () => {
+    const at = fireaxe.text.indexOf('swingLeft: true') + 'swing'.length;
+    const text = fireaxe.text.slice(0, at) + '\r\n    ' + fireaxe.text.slice(at);
+
+    expect(opensSuggestOnNewLine(text, at + '\r\n    '.length, SCHEMA)).toBe(false);
+  });
+
+  it('stays closed where there is nothing to offer', () => {
+    const text = '- type: entity\n  id: X\n\n';
+    expect(opensSuggestOnNewLine(text, text.length - 1, SCHEMA)).toBe(false);
   });
 });

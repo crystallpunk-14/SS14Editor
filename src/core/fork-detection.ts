@@ -12,10 +12,13 @@
  *     directories `Content.Server/`, `Content.Client/`, `Resources/Prototypes/`.
  *   - Schema DLLs live only in `bin/Content.Server/` and `bin/Content.Client/`
  *     (the upstream `OutputPath` convention) — not a per-project `bin`, not `obj`.
- *   - Build freshness: the newest DLL in `bin/Content.<X>/` must be no older
+ *   - Build freshness: the newest DLL in `bin/Content.<X>/` should be no older
  *     than the newest **git-tracked** `.cs` under `Content.<X>/`. A raw file
  *     walk would trip over generated `AssemblyInfo.cs`; `git ls-files` is the
  *     oracle. If git can't answer, staleness is treated as unprovable.
+ *     A stale build is a warning, not a blocker: its DLLs are the last good
+ *     build, and the schema read from them keeps every feature working — a
+ *     `git pull` without a rebuild must not silence the editor.
  */
 
 /** The slice of a directory the detector needs, all paths relative to the fork root. */
@@ -40,11 +43,20 @@ export type ForkProblemCode =
   | 'no-content-server'
   | 'no-content-client'
   | 'no-resources-prototypes'
-  | 'dlls-not-found'
-  | 'build-stale';
+  | 'dlls-not-found';
 
 export interface ForkRecognized {
   recognized: true;
+  /** Set when C# sources are newer than the built DLLs; the fork still works off the last build. */
+  stale?: StaleBuild;
+}
+
+/** A build behind its sources — shown as a warning, never a blocker. */
+export interface StaleBuild {
+  /** Which `Content.*` projects have sources newer than their DLLs. */
+  projects: string[];
+  /** Human-readable, panel-ready warning. */
+  message: string;
 }
 
 export interface ForkUnrecognized {
@@ -52,8 +64,6 @@ export interface ForkUnrecognized {
   code: ForkProblemCode;
   /** Human-readable, panel-ready explanation of the single blocking reason. */
   message: string;
-  /** For `build-stale`: which `Content.*` projects are behind their DLLs. */
-  staleProjects?: string[];
 }
 
 export type ForkStatus = ForkRecognized | ForkUnrecognized;
@@ -109,11 +119,15 @@ export function detectFork(fs: ForkFs): ForkStatus {
     return newestSource !== undefined && dllMtimes[index]! < newestSource;
   });
   if (staleProjects.length > 0) {
-    return problem(
-      'build-stale',
-      `Fork build is stale: ${staleProjects.join(', ')} C# source is newer than the DLLs in bin/. Rebuild the fork.`,
-      staleProjects,
-    );
+    return {
+      recognized: true,
+      stale: {
+        projects: staleProjects,
+        message:
+          `⚠ Fork build is stale: ${staleProjects.join(', ')} C# source is newer than the DLLs in bin/. ` +
+          'The schema comes from the last build — rebuild the fork to pick up the changes.',
+      },
+    };
   }
 
   return { recognized: true };
@@ -158,12 +172,6 @@ function newestMtime(fs: ForkFs, relPaths: string[]): number | undefined {
   return newest;
 }
 
-function problem(
-  code: ForkProblemCode,
-  message: string,
-  staleProjects?: string[],
-): ForkUnrecognized {
-  return staleProjects
-    ? { recognized: false, code, message, staleProjects }
-    : { recognized: false, code, message };
+function problem(code: ForkProblemCode, message: string): ForkUnrecognized {
+  return { recognized: false, code, message };
 }

@@ -168,22 +168,23 @@ describe('detectFork', () => {
   });
 
   describe('build freshness', () => {
-    it('flags a stale Content.Server build', () => {
+    // A stale build still has DLLs the schema can be read from — the last good
+    // build — so it is recognised, with a warning, rather than blocked.
+    it('recognises a stale Content.Server build, with a warning', () => {
       const spec = healthySpec();
       spec.files!['Content.Server/Foo.cs'] = T0 + 5000;
       expect(detectFork(fakeForkFs(spec))).toMatchObject({
-        recognized: false,
-        code: 'build-stale',
-        staleProjects: ['Content.Server'],
+        recognized: true,
+        stale: { projects: ['Content.Server'] },
       });
     });
 
-    it('flags a stale Content.Client build', () => {
+    it('recognises a stale Content.Client build, with a warning', () => {
       const spec = healthySpec();
       spec.files!['Content.Client/Bar.cs'] = T0 + 5000;
       expect(detectFork(fakeForkFs(spec))).toMatchObject({
-        code: 'build-stale',
-        staleProjects: ['Content.Client'],
+        recognized: true,
+        stale: { projects: ['Content.Client'] },
       });
     });
 
@@ -193,10 +194,12 @@ describe('detectFork', () => {
       spec.files!['Content.Client/Bar.cs'] = T0 + 5000;
       const status = detectFork(fakeForkFs(spec));
       expect(status).toMatchObject({
-        code: 'build-stale',
-        staleProjects: ['Content.Server', 'Content.Client'],
+        recognized: true,
+        stale: { projects: ['Content.Server', 'Content.Client'] },
       });
-      expect((status as { message: string }).message).toContain('Content.Server, Content.Client');
+      const message = (status as { stale: { message: string } }).stale.message;
+      expect(message).toContain('Content.Server, Content.Client');
+      expect(message).toContain('last build');
     });
 
     it('treats an equal mtime as fresh (not older, per spec)', () => {
@@ -237,11 +240,6 @@ describe('detectFork', () => {
         const s = healthySpec();
         delete s.files!['bin/Content.Server/Content.Server.dll'];
         delete s.files!['bin/Content.Server/Content.Shared.dll'];
-        return s;
-      })(),
-      (() => {
-        const s = healthySpec();
-        s.files!['Content.Server/Foo.cs'] = T0 + 5000;
         return s;
       })(),
     ];
