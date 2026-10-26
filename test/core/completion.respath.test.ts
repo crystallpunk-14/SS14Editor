@@ -169,20 +169,42 @@ describe('completionsAt — ResPath dispatch is by `fieldKind` alone', () => {
     ['`sprite:` of Sprite (a string)', inComponent('Sprite', 'sprite: /Textures/')],
     ['`state:` of Sprite (a string)', inComponent('Sprite', 'state: /Textures/')],
     ['`path:` inside an untagged SoundSpecifier', inComponent('MeleeWeapon', 'soundHit:\n      path: /Audio/')],
-    [
-      '`path:` inside a `!type:SoundPathSpecifier`',
-      inComponent('MeleeWeapon', 'soundHit: !type:SoundPathSpecifier\n      path: /Audio/'),
-    ],
-    [
-      '`sprite:` inside a `!type:Rsi` SpriteSpecifier',
-      inComponent('GrapplingGun', 'ropeSprite: !type:Rsi\n      sprite: /Textures/'),
-    ],
   ])('offers no paths on %s', (_, text) => {
     const tree = resources();
     const offset = text.lastIndexOf('/') + 1;
 
     expect(completionsAt(text, offset, SCHEMA, undefined, tree)).toEqual([]);
     expect(tree.listed).toEqual([]);
+  });
+
+  it.each([
+    [
+      '`path:` inside a `!type:SoundPathSpecifier`',
+      inComponent('MeleeWeapon', 'soundHit: !type:SoundPathSpecifier\n      path: /Audio/'),
+      'Audio',
+    ],
+    [
+      '`sprite:` inside a `!type:Rsi` SpriteSpecifier',
+      inComponent('GrapplingGun', 'ropeSprite: !type:Rsi\n      sprite: /Textures/'),
+      'Textures',
+    ],
+  ])('offers paths on %s, whose tag names a member declaring a ResPath', (_, text, dir) => {
+    const tree = resources();
+    const offset = text.lastIndexOf('/') + 1;
+
+    expect(completionsAt(text, offset, SCHEMA, undefined, tree)).not.toEqual([]);
+    expect(tree.listed).toEqual([dir]);
+  });
+
+  it('offers the root on an empty `path:` under `!type:SoundPathSpecifier`', () => {
+    const text = inComponent('SoundOnGather', 'sound: !type:SoundPathSpecifier\n      path: ');
+    const offset = after(text, 'path: ');
+
+    expect(completionsAt(text, offset, SCHEMA, undefined, resources()).map((c) => c.insertText)).toEqual([
+      '/Audio/',
+      '/Maps/',
+      '/Textures/',
+    ]);
   });
 
   it('offers nothing without a resource tree', () => {

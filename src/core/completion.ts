@@ -664,23 +664,18 @@ const BOOLEAN_VALUES = ['false', 'true'] as const;
 
 /**
  * Whether the caret's value is a path under `Resources/`: a slot declared
- * `ResPath` (or a list of them), reached without passing through a
- * `SpriteSpecifier`/`SoundSpecifier`. Those wrappers are one opaque kind
- * (ADR-0001): a `!type:SoundPathSpecifier` tag does reach a `ResPath` `path:`
- * inside, but the dispatch is by the declared type of the field, and the field
- * is the specifier.
+ * `ResPath`, or a list of them. Only the declared type decides, so a
+ * `SpriteSpecifier`/`SoundSpecifier` gets paths only where a `!type:` tag names
+ * the member whose field is a `ResPath` (`!type:SoundPathSpecifier` -> `path:`);
+ * untagged, the base declares no such field and the slot stays empty (ADR-0001).
  */
 function onResPathSlot(ctx: CursorContext, schema: SchemaRoot): boolean {
   const slot = slotAt(ctx, schema);
-  if (!slot || itemOf(slot.node).kind !== RES_PATH_KIND) return false;
-  return !chainAt(ctx, schema)?.steps.some((step) => SPECIFIER_KINDS.has(itemOf(step).kind));
+  return !!slot && itemOf(slot.node).kind === RES_PATH_KIND;
 }
 
 /** `FieldMetadata.fieldKind` the CLI emits for a `ResPath`-typed field. */
 const RES_PATH_KIND = 'resPath';
-
-/** The opaque wrappers over a `ResPath`, whose inner fields get no path completion. */
-const SPECIFIER_KINDS = new Set(['soundSpecifier', 'spriteSpecifier']);
 
 /**
  * The prototype kind a slot's value names, or `null` when it names none:
@@ -934,25 +929,18 @@ function containerFields(ref: FieldRef, schema: SchemaRoot): readonly FieldMetad
  * into — fields, and the entry keys of any dictionaries on the way.
  */
 function scopeAt(ref: FieldRef, schema: SchemaRoot): Scope | null {
-  return chainAt(ref, schema)?.scope ?? null;
-}
-
-/** {@link scopeAt}, along with the declared type of each key walked through on the way. */
-function chainAt(ref: FieldRef, schema: SchemaRoot): { scope: Scope; steps: readonly TypeNode[] } | null {
   const root = rootFieldsFor(ref, schema);
   if (!root) return null;
 
   let scope: Scope = { fields: root };
-  const steps: TypeNode[] = [];
   for (let step = 0; step < ref.fieldPath.length - 1; step++) {
     const slot = slotIn(scope, ref.fieldPath[step]);
     if (!slot) return null;
     const inner = scopeUnder(slot.node, ref.fieldTags[step] ?? null, schema);
     if (!inner) return null;
-    steps.push(slot.node);
     scope = inner;
   }
-  return { scope, steps };
+  return scope;
 }
 
 function slotIn(scope: Scope, key: string): Slot | null {
