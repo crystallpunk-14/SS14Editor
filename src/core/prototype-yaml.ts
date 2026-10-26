@@ -9,8 +9,8 @@
  *      `{ entityIndex, component, fieldPath }` — an exact value range, or the
  *      container plus the missing key tail when the field is only inherited.
  *   2. offset -> context  ({@link cursorContextAt}): which prototype, component
- *      and field does an offset fall in, and is it on a key, a value, or the
- *      `type:` slot of a component-registry entry. Which sequence-valued fields
+ *      and field does an offset fall in, and is it on a key, a value, the
+ *      `type:` slot of a component-registry entry, or a value's `!type:` tag. Which sequence-valued fields
  *      are registries is the caller's to say ({@link CursorContextOptions}) —
  *      `ComponentRegistry` is a declared field type, and only a schema knows it.
  *   3. path -> surgical edit  ({@link replaceScalarValue}, {@link replaceBlockScalarValue},
@@ -25,7 +25,8 @@
  *     `LineCounter` for offset -> line/col. Positions here come from the AST
  *     (`node.range`); `keepSourceTokens` is pinned by the spec — the deletion
  *     edits read the CST (`node.srcToken`) for the exact marker offset and
- *     comment ownership of a list/map item.
+ *     comment ownership of a list/map item, and the cursor walk reads it for
+ *     the span of a `!type:` tag, which no node range covers.
  *   - No incremental parser: re-parse the whole document on every edit.
  *   - Any `doc.errors` => the file is "invalid" as a whole; callers get an error
  *     flag, never a partial tree.
@@ -143,6 +144,14 @@ export type CursorToken =
   | { readonly kind: 'value' }
   /** On the `type:` value slot of a `components:` entry (the component-name completion point). */
   | { readonly kind: 'component-type'; readonly text: string | null }
+  /**
+   * On the `!type:` tag of a value or list item (issue #43). `text` is the member
+   * name written after `!type:` so far — `null` while there is none (`!type:`, or
+   * a tag still being typed, `!ty`). `range` spans the whole tag as written, the
+   * span a completion replaces. {@link CursorContext.fieldPath} is that of the
+   * tagged value: the field — or, for a list item, the list.
+   */
+  | { readonly kind: 'type-tag'; readonly text: string | null; readonly range: readonly [number, number] }
   | { readonly kind: 'none' };
 
 export interface CursorContext {
@@ -453,6 +462,12 @@ function spans(node: unknown, offset: number): node is Node {
   return !!range && offset >= range[0] && offset < range[2];
 }
 
+/** {@link spans}, closed at the end on the walk's end-inclusive retry (see {@link Walk.endInclusive}). */
+function covers(node: unknown, walk: Walk): node is Node {
+  const range = (node as Node | null | undefined)?.range;
+  return !!range && walk.offset >= range[0] && (walk.endInclusive ? walk.offset <= range[2] : walk.offset < range[2]);
+}
+
 /**
  * True only when `offset` is on the *value* slot of `type:` — strictly past the
  * `type` key, up to the value's text end (or the rest of the line when nothing
@@ -512,6 +527,14 @@ interface Walk {
   readonly text: string;
   readonly prototypeType: string | null;
   readonly isRegistry: (site: RegistrySite) => boolean;
+  /**
+   * Read every node range as closed at its end. An empty tagged scalar (`- !type:`,
+   * `event: !ty`) is a zero-width node right after its tag, so when it is the
+   * last thing in a prototype every enclosing range ends exactly where the tag
+   * does — and a caret typing at the tag's end is outside all of them. The
+   * end-inclusive walk is a retry that only a `type-tag` landing may come from.
+   */
+  readonly endInclusive: boolean;
 }
 
 /**
@@ -564,7 +587,8 @@ function walkMap(map: YAMLMap, frame: Frame, walk: Walk): Landing | null {
 
     const nextKeyStart =
       i + 1 < items.length ? (items[i + 1].key as Node | null)?.range?.[0] ?? mapEnd : mapEnd;
-    if (walk.offset < keyRange[0] || walk.offset >= nextKeyStart) continue;
+    const pastPair = walk.endInclusive ? walk.offset > nextKeyStart : walk.offset >= nextKeyStart;
+    if (walk.offset < keyRange[0] || pastPair) continue;
 
     const value = (pair.value as Node | undefined) ?? null;
     const here: Frame = {
@@ -582,6 +606,8 @@ function walkMap(map: YAMLMap, frame: Frame, walk: Walk): Landing | null {
     });
 
     if (walk.offset <= keyRange[1]) return landed({ kind: 'key', name: keyName });
+    const tag = tagTokenAt(cstMapItem(map, keyRange[0])?.sep, walk.offset);
+    if (tag) return landed(tag);
     return walkValue(value, here, walk) ?? landed({ kind: 'value' });
   }
   return null;
@@ -589,7 +615,11 @@ function walkMap(map: YAMLMap, frame: Frame, walk: Walk): Landing | null {
 
 /** Walk into a pair's value: a nested map, a component registry, or a plain sequence. */
 function walkValue(value: Node | null, frame: Frame, walk: Walk): Landing | null {
-  if (!value || !spans(value, walk.offset)) return null;
+  if (!value) return null;
+  // Before the range check: an empty `- !type:` closing the list ends exactly
+  // where its tag does, so the caret at the tag's end is past the list's range.
+  if (isSeq(value) && !covers(value, walk)) return taggedItemAt(value, frame, walk);
+  if (!covers(value, walk)) return null;
   if (isMap(value)) return walkMap(value, frame, walk);
   if (!isSeq(value)) return null;
 
@@ -610,7 +640,10 @@ function walkValue(value: Node | null, frame: Frame, walk: Walk): Landing | null
  * tag chain.
  */
 function walkSeq(seq: YAMLSeq, frame: Frame, walk: Walk): Landing | null {
-  const item = seq.items.find((candidate) => spans(candidate, walk.offset)) as Node | undefined;
+  const tagged = taggedItemAt(seq, frame, walk);
+  if (tagged) return tagged;
+
+  const item = seq.items.find((candidate) => covers(candidate, walk)) as Node | undefined;
   if (!item) return null;
 
   const framed: Frame = { ...frame, tags: [...frame.tags.slice(0, -1), tagOf(item)] };
@@ -620,12 +653,79 @@ function walkSeq(seq: YAMLSeq, frame: Frame, walk: Walk): Landing | null {
 }
 
 /**
+ * The landing on a sequence item's `!type:` tag, when the offset is on one. The
+ * tag is not part of the item node's range — `yaml` keeps it among the item's
+ * CST props — so it is looked up there. A component registry never gets here:
+ * its items are untagged `- type: X` blocks.
+ */
+function taggedItemAt(seq: YAMLSeq, frame: Frame, walk: Walk): Landing | null {
+  const cstItems = cstOf(seq)?.items ?? [];
+  for (let i = 0; i < cstItems.length; i++) {
+    const tag = tagTokenAt(cstItems[i].start, walk.offset);
+    if (!tag) continue;
+    const item = (seq.items[i] as Node | undefined) ?? null;
+    return {
+      component: frame.component,
+      fieldPath: frame.chain,
+      fieldTags: [...frame.tags.slice(0, -1), tagOf(item)],
+      containerKeys: [],
+      token: tag,
+      node: item,
+    };
+  }
+  return null;
+}
+
+/** The slice of `yaml`'s CST this module reads: a collection's items and their prop tokens. */
+interface CstToken {
+  readonly type: string;
+  readonly offset: number;
+  readonly source?: string;
+}
+
+interface CstCollectionItem {
+  readonly start: readonly CstToken[];
+  readonly key?: CstToken | null;
+  readonly sep?: readonly CstToken[];
+}
+
+function cstOf(node: Node): { readonly type: string; readonly items: readonly CstCollectionItem[] } | null {
+  const token = (node as { srcToken?: { type?: string; items?: unknown } }).srcToken;
+  return token && Array.isArray(token.items)
+    ? (token as { type: string; items: readonly CstCollectionItem[] })
+    : null;
+}
+
+/** The CST item of `map` whose key starts at `keyStart` — it holds the pair's props, tag included. */
+function cstMapItem(map: YAMLMap, keyStart: number): CstCollectionItem | null {
+  return cstOf(map)?.items.find((item) => item.key?.offset === keyStart) ?? null;
+}
+
+/** `!type:` — how the engine writes "this member of the union" in YAML. */
+export const TYPE_TAG_PREFIX = '!type:';
+
+/**
+ * The `type-tag` token for the tag among `props` the offset sits on — anywhere
+ * from just before its `!` to just after its last character — or `null`.
+ */
+function tagTokenAt(props: readonly CstToken[] | undefined, offset: number): CursorToken | null {
+  const tag = props?.find((token) => token.type === 'tag');
+  const source = tag?.source;
+  if (!tag || source === undefined) return null;
+  const end = tag.offset + source.length;
+  if (offset < tag.offset || offset > end) return null;
+
+  const name = source.startsWith(TYPE_TAG_PREFIX) ? source.slice(TYPE_TAG_PREFIX.length) : '';
+  return { kind: 'type-tag', text: name || null, range: [tag.offset, end] };
+}
+
+/**
  * A `ComponentRegistry` sequence: every item is a `- type: X` block whose fields
  * belong to that component, so the caret inside one is addressed from the
  * component and the frame starts over.
  */
 function walkRegistry(seq: YAMLSeq, walk: Walk): Landing | null {
-  const item = seq.items.find((candidate) => spans(candidate, walk.offset));
+  const item = seq.items.find((candidate) => covers(candidate, walk));
   if (!isMap(item)) return null;
 
   const typePair = findPair(item, 'type');
@@ -644,6 +744,14 @@ function walkRegistry(seq: YAMLSeq, walk: Walk): Landing | null {
   return walkMap(item, { component, chain: [], tags: [] }, walk);
 }
 
+/** The caret line so far ends in a tag being written: `- !type:`, `event: !ty`. */
+const TAG_BEFORE_CARET = /![^\s]*$/;
+
+/** A prototype map's own `type:` value (`entity`, `jobIcon`, …), or `null`. */
+function prototypeTypeOf(entity: YAMLMap): string | null {
+  return scalarString(mapGet(entity, 'type')) ?? null;
+}
+
 /**
  * Describe where `offset` sits: which prototype and (inside a component
  * registry, at any depth) which component, the key chain to the field with the
@@ -660,30 +768,39 @@ export function cursorContextAt(
   const { root, text } = must(file);
   if (!isSeq(root)) return NOWHERE;
 
-  const entityIndex = root.items.findIndex((item) => spans(item, offset));
+  const walkFrom = (entityIndex: number, endInclusive: boolean): Landing | null => {
+    const entity = root.items[entityIndex];
+    if (!isMap(entity)) return null;
+    return walkMap(entity, ROOT_FRAME, {
+      offset,
+      text,
+      prototypeType: prototypeTypeOf(entity),
+      isRegistry: options?.isComponentRegistry ?? isDefaultRegistry,
+      endInclusive,
+    });
+  };
+
+  let entityIndex = root.items.findIndex((item) => spans(item, offset));
+  let landing = entityIndex < 0 ? null : walkFrom(entityIndex, false);
+
+  if (landing?.token.kind !== 'type-tag' && TAG_BEFORE_CARET.test(text.slice(lineStartAt(text, offset), offset))) {
+    // The end-inclusive retry: a caret at the end of an empty tag that closes
+    // the prototype (see `Walk.endInclusive`).
+    const atEnd = root.items.findIndex((item) => (item as Node).range?.[2] === offset);
+    const retryIndex = atEnd >= 0 ? atEnd : entityIndex;
+    const retry = retryIndex < 0 ? null : walkFrom(retryIndex, true);
+    if (retry?.token.kind === 'type-tag') {
+      entityIndex = retryIndex;
+      landing = retry;
+    }
+  }
   if (entityIndex < 0) return NOWHERE;
 
   const entity = root.items[entityIndex];
-  const prototypeType = isMap(entity) ? scalarString(mapGet(entity, 'type')) ?? null : null;
-  const shell = { entityIndex, prototypeType };
-  const nothingHere: CursorContext = {
-    ...shell,
-    component: null,
-    fieldPath: [],
-    fieldTags: [],
-    containerKeys: [],
-    token: { kind: 'none' },
-  };
-
-  if (!isMap(entity)) return nothingHere;
-
-  const landing = walkMap(entity, ROOT_FRAME, {
-    offset,
-    text,
-    prototypeType,
-    isRegistry: options?.isComponentRegistry ?? isDefaultRegistry,
-  });
-  if (!landing) return nothingHere;
+  const shell = { entityIndex, prototypeType: isMap(entity) ? prototypeTypeOf(entity) : null };
+  if (!landing) {
+    return { ...shell, component: null, fieldPath: [], fieldTags: [], containerKeys: [], token: { kind: 'none' } };
+  }
 
   return {
     ...shell,

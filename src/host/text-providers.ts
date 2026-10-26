@@ -146,7 +146,7 @@ export class PrototypeCompletionProvider implements vscode.CompletionItemProvide
     // model) and `offsetAt` counts over that same text, so offsets line up with
     // what the core parses.
     const candidates = completionsAt(document.getText(), document.offsetAt(position), schema, this.index);
-    return candidates.map(toCompletionItem);
+    return candidates.map((candidate) => toCompletionItem(document, candidate));
   }
 }
 
@@ -206,16 +206,24 @@ const KIND: Record<CompletionCandidate['kind'], vscode.CompletionItemKind> = {
   field: vscode.CompletionItemKind.Field,
   value: vscode.CompletionItemKind.EnumMember,
   id: vscode.CompletionItemKind.Reference,
+  type: vscode.CompletionItemKind.TypeParameter,
 };
 
-function toCompletionItem(candidate: CompletionCandidate): vscode.CompletionItem {
+function toCompletionItem(document: vscode.TextDocument, candidate: CompletionCandidate): vscode.CompletionItem {
   const item = new vscode.CompletionItem(candidate.label, KIND[candidate.kind]);
   if (candidate.detail) item.detail = candidate.detail;
-  // Set only where the core had to synthesize the `type:` key the caret needs;
-  // `filterText` keeps the bare name matching what the author actually types.
+  // Set only where the core had to synthesize syntax the caret needs (`type:`,
+  // a colon, a `!type:` tag); `filterText` keeps the bare name matching what the
+  // author actually types.
   if (candidate.insertText) {
     item.insertText = candidate.insertText;
     item.filterText = candidate.label;
+  }
+  // A written `!type:` tag is replaced whole, and VS Code filters on the text
+  // from the range start — `!type:Weap` — so match it against the full tag.
+  if (candidate.range) {
+    item.range = new vscode.Range(document.positionAt(candidate.range[0]), document.positionAt(candidate.range[1]));
+    item.filterText = candidate.insertText ?? candidate.label;
   }
   return item;
 }

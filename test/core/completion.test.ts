@@ -689,3 +689,182 @@ describe('reopensSuggestAfterDeletion', () => {
     expect(reopensSuggestAfterDeletion(text, offset, SCHEMA)).toBe(false);
   });
 });
+
+describe('completionsAt — `!type:` members of a polymorphic slot (#43)', () => {
+  const claw = parsedFixture('claw.yml');
+  const CE_EFFECT = 'Content.Shared._CE.EntityEffect.CEEntityEffect';
+  const INSTANT_EVENT = 'Content.Shared.Actions.InstantActionEvent';
+
+  /** `text` with the first `find` replaced by `replace`; the caret goes after `caretAfter` in the replacement. */
+  function edited(text: string, find: string, replace: string, caretAfter = replace) {
+    const at = text.indexOf(find);
+    expect(at).toBeGreaterThanOrEqual(0);
+    return { text: text.slice(0, at) + replace + text.slice(at + find.length), offset: at + caretAfter.length };
+  }
+
+  function shortNames(base: string): string[] {
+    return SCHEMA.polymorphicTypes[base].map((full) => full.slice(full.lastIndexOf('.') + 1)).sort();
+  }
+
+  it('on a written tag, offers every member of the list\'s element type, replacing the whole tag', () => {
+    const tagStart = claw.text.indexOf('!type:WeaponArcAttack');
+    const typed = '!type:WeaponArc';
+    const candidates = completionsAt(claw.text, tagStart + typed.length, SCHEMA);
+
+    expect(candidates.map((c) => c.label).sort()).toEqual(shortNames(CE_EFFECT));
+    expect(candidates.find((c) => c.label === 'WeaponArcAttack')).toEqual({
+      label: 'WeaponArcAttack',
+      kind: 'type',
+      detail: 'Content.Shared._CE.EntityEffect.Effects.WeaponArcAttack',
+      insertText: '!type:WeaponArcAttack',
+      range: [tagStart, tagStart + '!type:WeaponArcAttack'.length],
+    });
+    // The host filters on the insert text against what is typed in the range.
+    const matching = candidates.filter((c) => c.insertText?.startsWith(typed)).map((c) => c.label);
+    expect(matching).toEqual(['WeaponArcAttack']);
+  });
+
+  it('on an empty `!type:` list item, offers the whole list', () => {
+    const { text, offset } = edited(claw.text, '- !type:Knockdown', '- !type:');
+    const candidates = completionsAt(text, offset, SCHEMA);
+
+    expect(candidates.map((c) => c.label)).toEqual(expect.arrayContaining(['Damage', 'Knockdown', 'ThrowFrom']));
+    expect(candidates).toHaveLength(SCHEMA.polymorphicTypes[CE_EFFECT].length);
+    expect(candidates[0].range).toEqual([offset - '!type:'.length, offset]);
+  });
+
+  it('on a bare `- ` in a list of effects, inserts the whole tag', () => {
+    const { text, offset } = edited(claw.text, '      - !type:ThrowFrom', '      - \r\n      - !type:ThrowFrom', '      - ');
+    const damage = completionsAt(text, offset, SCHEMA).find((c) => c.label === 'Damage');
+
+    expect(damage).toEqual({
+      label: 'Damage',
+      kind: 'type',
+      detail: 'Content.Shared._CE.EntityEffect.Effects.Damage',
+      insertText: '!type:Damage',
+    });
+  });
+
+  it('right against the dash, re-supplies the space', () => {
+    const { text, offset } = edited(claw.text, '      - !type:ThrowFrom', '      -\r\n      - !type:ThrowFrom', '      -');
+
+    expect(completionsAt(text, offset, SCHEMA).find((c) => c.label === 'Damage')?.insertText).toBe(' !type:Damage');
+  });
+
+  it('on an `event:` tag, offers the members of the event type the field declares', () => {
+    const types = parsedFixture('types.yml');
+    const offset = types.text.indexOf('!type:ToggleActionEvent') + '!type:Tog'.length;
+    const candidates = completionsAt(types.text, offset, SCHEMA);
+
+    expect(candidates.map((c) => c.label).sort()).toEqual(shortNames(INSTANT_EVENT));
+    expect(candidates.map((c) => c.label)).toContain('ToggleActionEvent');
+  });
+
+  it('on an empty `event: ` slot, inserts the whole tag', () => {
+    const types = parsedFixture('types.yml');
+    const { text, offset } = edited(types.text, 'event: !type:ToggleActionEvent', 'event: ');
+    const toggle = completionsAt(text, offset, SCHEMA).find((c) => c.label === 'ToggleActionEvent');
+
+    expect(toggle).toEqual({
+      label: 'ToggleActionEvent',
+      kind: 'type',
+      detail: 'Content.Shared.Toggleable.ToggleActionEvent',
+      insertText: '!type:ToggleActionEvent',
+    });
+  });
+
+  it('right after `event:` with no space yet, re-supplies it', () => {
+    const types = parsedFixture('types.yml');
+    const { text, offset } = edited(types.text, 'event: !type:ToggleActionEvent', 'event:');
+
+    expect(completionsAt(text, offset, SCHEMA).find((c) => c.label === 'ToggleActionEvent')?.insertText).toBe(
+      ' !type:ToggleActionEvent',
+    );
+  });
+
+  it('offers a DoAfterEvent field the members of DoAfterEvent', () => {
+    const doAfterEvent = SCHEMA.dataDefinitions['Content.Shared.DoAfter.DoAfterArgs'].fields.find(
+      (f) => f.tag === 'event',
+    )!;
+    // No prototype reaches a DoAfterArgs in this fork, so hang its field on a probe component.
+    const schema = {
+      ...SCHEMA,
+      components: { ...SCHEMA.components, Probe: { className: 'Probe', name: 'Probe', fields: [doAfterEvent] } },
+    };
+    const text = '- type: entity\n  id: X\n  components:\n  - type: Probe\n    event: \n';
+    const offset = text.indexOf('event: ') + 'event: '.length;
+
+    expect(completionsAt(text, offset, schema).map((c) => c.label)).toEqual(
+      expect.arrayContaining(['CECraftDoAfterEvent', 'HealingDoAfterEvent']),
+    );
+  });
+
+  it('offers a `sound:` the two SoundSpecifier members', () => {
+    const alerts = parsedFixture('alert_levels.yml');
+    const { text, offset } = edited(alerts.text, 'sound: /Audio/Misc/bluealert.ogg', 'sound: ');
+    const candidates = completionsAt(text, offset, SCHEMA);
+
+    expect(candidates.map((c) => [c.label, c.detail, c.insertText])).toEqual([
+      ['SoundCollectionSpecifier', 'Robust.Shared.Audio.SoundCollectionSpecifier', '!type:SoundCollectionSpecifier'],
+      ['SoundPathSpecifier', 'Robust.Shared.Audio.SoundPathSpecifier', '!type:SoundPathSpecifier'],
+    ]);
+  });
+
+  it('offers them too on `sound:` whose map is already written below', () => {
+    const drinks = parsedFixture('drinks_bottles_plastic.yml');
+    const offset = drinks.text.indexOf('    sound:') + '    sound:'.length;
+
+    expect(completionsAt(drinks.text, offset, SCHEMA).map((c) => c.insertText)).toEqual([
+      ' !type:SoundCollectionSpecifier',
+      ' !type:SoundPathSpecifier',
+    ]);
+  });
+
+  it('never offers a member the CLI saw as abstract', () => {
+    const types = parsedFixture('types.yml');
+    const { text, offset } = edited(types.text, 'event: !type:ToggleActionEvent', 'event: !type:');
+    const labels = completionsAt(text, offset, SCHEMA).map((c) => c.label);
+
+    expect(labels).not.toContain('InstantActionEvent');
+    expect(labels).not.toContain('BaseActionEvent');
+  });
+
+  it('stays silent on a field that is not polymorphic', () => {
+    const empty = edited(claw.text, 'arcWidth: 40', 'arcWidth: ');
+    expect(completionsAt(empty.text, empty.offset, SCHEMA)).toEqual([]);
+
+    const tagged = edited(claw.text, 'arcWidth: 40', 'arcWidth: !type:');
+    expect(completionsAt(tagged.text, tagged.offset, SCHEMA)).toEqual([]);
+  });
+});
+
+describe('reopensSuggestAfterDeletion — on an emptied `!type:` tag (#43)', () => {
+  it('reopens once the member name is deleted back to `!type:`', () => {
+    const claw = parsedFixture('claw.yml');
+    const at = claw.text.indexOf('!type:Knockdown');
+    const text = claw.text.slice(0, at) + '!type:' + claw.text.slice(at + '!type:Knockdown'.length);
+
+    expect(reopensSuggestAfterDeletion(text, at + '!type:'.length, SCHEMA)).toBe(true);
+  });
+});
+
+describe('completionsAt — blank line in a list of union members (#43)', () => {
+  const claw = parsedFixture('claw.yml');
+
+  it('between two items, offers the members with the dash and the tag', () => {
+    const at = claw.text.indexOf('      - !type:ThrowFrom');
+    const text = claw.text.slice(0, at) + '      \r\n' + claw.text.slice(at);
+    const damage = completionsAt(text, at + '      '.length, SCHEMA).find((c) => c.label === 'Damage');
+
+    expect(damage?.insertText).toBe('- !type:Damage');
+  });
+
+  it('after the last item, stays a key of the enclosing map', () => {
+    const anchor = '      - !type:WeaponEffectSlot\r\n        slot: OnHit\r\n';
+    const at = claw.text.indexOf(anchor) + anchor.length;
+    const text = claw.text.slice(0, at) + '      \r\n' + claw.text.slice(at);
+    const candidates = completionsAt(text, at + '      '.length, SCHEMA);
+
+    expect(candidates.some((c) => c.kind === 'type')).toBe(false);
+  });
+});

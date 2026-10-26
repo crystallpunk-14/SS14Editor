@@ -7,7 +7,7 @@
  *
  * The cursor context is entirely {@link cursorContextAt}'s job (issue #24) — this
  * module never walks the YAML tree itself. From that context it decides which of
- * six lists the caret is asking for:
+ * seven lists the caret is asking for:
  *
  *   1. component names   — on the `type:` value slot of a component-registry entry;
  *   2. component fields  — on a key inside a component block;
@@ -20,7 +20,11 @@
  *      — plus prototype ids (`protoId`/`entityProtoId`, and `parent:`), whose
  *      domain is the prototype index rather than the schema (issue #33);
  *   6. prototype types   — on the `type:` value slot of the prototype itself,
- *      one level out from (1).
+ *      one level out from (1);
+ *   7. union members     — on a `!type:` tag, or where one can still go (a bare
+ *      `- ` in a list, an empty value slot), when the declared type is a key of
+ *      the schema's `polymorphicTypes`: the short class names the engine
+ *      accepts after `!type:` (issue #43).
  *
  * Cases 2–4 exclude keys already written in the caret's block
  * ({@link CursorContext.containerKeys}). The schema keys prototypes by their
@@ -74,6 +78,7 @@
 import {
   cursorContextAt,
   parsePrototypeFile,
+  TYPE_TAG_PREFIX,
   type CursorContext,
   type PrototypeFile,
 } from './prototype-yaml';
@@ -89,18 +94,26 @@ import type {
 export interface CompletionCandidate {
   /** The name shown in the list — a prototype/component name, a field key, an enum member. */
   readonly label: string;
-  readonly kind: 'prototype' | 'component' | 'field' | 'value' | 'id';
+  readonly kind: 'prototype' | 'component' | 'field' | 'value' | 'id' | 'type';
   /**
    * Short right-aligned signature: a declared type, a class name, an enum type,
-   * or — for an id — its prototype kind, `(abstract)` when it is one.
+   * or — for an id — its prototype kind, `(abstract)` when it is one. A union
+   * member's is its full type name, the one thing a bare class name can repeat.
    */
   readonly detail?: string;
   /**
-   * Text to insert when it differs from {@link label} — set only where the caret
-   * sits on a bare `- ` and the `type:` key it needs is still missing, so picking
-   * `Clothing` writes `type: Clothing`, not `Clothing`.
+   * Text to insert when it differs from {@link label} — where the document is
+   * still missing syntax the candidate needs: the `type:` key on a bare `- `
+   * (picking `Clothing` writes `type: Clothing`), a field key's colon, or a union
+   * member's `!type:` tag.
    */
   readonly insertText?: string;
+  /**
+   * `[start, end)` offsets to replace instead of the word at the caret — set on a
+   * `!type:` tag already in the text, whose `!` and `:` are not word characters,
+   * so the whole tag is swapped for {@link insertText}.
+   */
+  readonly range?: readonly [number, number];
 }
 
 /**
@@ -121,6 +134,12 @@ export function completionsAt(
   const { ctx, insertPrefix, keyNeedsColon } = resolved;
 
   switch (ctx.token.kind) {
+    case 'type-tag':
+      return memberCandidates(polymorphicBaseOf(slotAt(ctx, schema), schema, true), schema, {
+        insertPrefix,
+        // A tag the recovery wrote has no span in the document to replace.
+        range: resolved.rewritten ? undefined : ctx.token.range,
+      });
     case 'component-type':
       return componentNameCandidates(schema, insertPrefix);
     case 'key':
@@ -128,9 +147,12 @@ export function completionsAt(
         ? fieldKeyCandidates(ctx, schema, keyNeedsColon)
         : dictionaryKeyCandidates(ctx, schema, index, keyNeedsColon);
     case 'value':
-      return onPrototypeTypeSlot(ctx)
-        ? prototypeNameCandidates(schema, insertPrefix)
-        : valueCandidates(ctx, schema, index, insertPrefix);
+      if (onPrototypeTypeSlot(ctx)) return prototypeNameCandidates(schema, insertPrefix);
+      if (resolved.openValueSlot) {
+        const base = polymorphicBaseOf(slotAt(ctx, schema), schema, false);
+        if (base) return memberCandidates(base, schema, { insertPrefix });
+      }
+      return valueCandidates(ctx, schema, index, insertPrefix);
     default:
       return [];
   }
@@ -153,7 +175,7 @@ export function reopensSuggestAfterDeletion(
   index?: PrototypeIndexView,
 ): boolean {
   const before = text.slice(lineStartAt(text, offset), offset);
-  if (!PARTIAL_WORD.test(before) && !EMPTIED_VALUE.test(before)) return false;
+  if (!PARTIAL_WORD.test(before) && !EMPTIED_VALUE.test(before) && !EMPTIED_TAG.test(before)) return false;
   return completionsAt(text, offset, schema, index).length > 0;
 }
 
@@ -162,6 +184,9 @@ const PARTIAL_WORD = /[^\s:\-#,[\]{}'"]$/;
 
 /** A line that ends in an empty value slot: `key:` plus at least one space. */
 const EMPTIED_VALUE = /:[ \t]+$/;
+
+/** A line that ends in a `!type:` tag with its member name deleted. */
+const EMPTIED_TAG = /!type:$/;
 
 /**
  * True on the value slot of a prototype's own `type:` — the sibling of the
@@ -207,6 +232,13 @@ interface ResolvedCursor {
    * own — `swingLeft` -> `swingLeft: ` — landing the caret on the value slot.
    */
   readonly keyNeedsColon: boolean;
+  /** The context was read from a rewritten caret line, so its offsets are not the document's. */
+  readonly rewritten: boolean;
+  /**
+   * The caret sits after a `key:` with nothing written behind it on the line —
+   * where a `!type:` tag may still go, whether or not a block map follows below.
+   */
+  readonly openValueSlot: boolean;
 }
 
 /**
@@ -228,10 +260,19 @@ function resolveCursor(text: string, offset: number, schema: SchemaRoot): Resolv
   const directCtx = direct.ok ? contextAt(direct, offset, schema) : null;
   const line = lineAround(text, offset);
   const keyNeedsColon = !line.includes(':');
+  const openValueSlot = onOpenValueSlot(text, offset, line);
+
+  // A tag in the text is read where it is: `- !type:` also looks like an empty
+  // value slot to the rewrites below, and the sentinel they park would land
+  // past the tag.
+  if (directCtx?.token.kind === 'type-tag') {
+    return { ctx: directCtx, insertPrefix: '', keyNeedsColon, rewritten: false, openValueSlot: false };
+  }
 
   const rewrites = keyNeedsColon
     ? [
         withScalarItem(text, offset, line),
+        withTagItem(text, offset, line),
         withTypeKey(text, offset, line),
         withSentinelKey(text, offset, line),
       ]
@@ -243,11 +284,23 @@ function resolveCursor(text: string, offset: number, schema: SchemaRoot): Resolv
     if (!retry.ok) continue;
     const ctx = contextAt(retry, rewrite.offset, schema);
     if (rewrite.expect.includes(ctx.token.kind) && (rewrite.accept?.(ctx, schema) ?? true)) {
-      return { ctx, insertPrefix: rewrite.insertPrefix, keyNeedsColon };
+      return { ctx, insertPrefix: rewrite.insertPrefix, keyNeedsColon, rewritten: true, openValueSlot };
     }
   }
 
-  return directCtx ? { ctx: directCtx, insertPrefix: '', keyNeedsColon } : null;
+  // The slot rewrite fails to parse where a block already follows below
+  // (`sound:` over its `path:`); the caret right against the colon still needs
+  // its space.
+  const againstColon = openValueSlot && text[offset - 1] === ':';
+  return directCtx
+    ? { ctx: directCtx, insertPrefix: againstColon ? ' ' : '', keyNeedsColon, rewritten: false, openValueSlot }
+    : null;
+}
+
+/** True when the caret is past the colon of a `key:` that has nothing after it on the line. */
+function onOpenValueSlot(text: string, offset: number, line: string): boolean {
+  const match = EMPTY_VALUE_SLOT.exec(line);
+  return !!match && offset >= lineStartAt(text, offset) + match[1].length;
 }
 
 /**
@@ -344,6 +397,46 @@ function withScalarItem(text: string, offset: number, line: string): Rewrite | n
     // `-FireAxe` would be a scalar, not an item: re-supply the space.
     insertPrefix: gap.length > 0 ? '' : ' ',
   };
+}
+
+/**
+ * A bare `- ` in a list of a union type (`effects:` of `CEEntityEffect`s) is the
+ * start of one more tagged member. Rewrite it to `<indent>- !type:` and accept
+ * the landing only when the list's element is polymorphic — anywhere else a
+ * bare `- ` is a component, a prototype or an id, read by the neighbouring
+ * rewrites. The tag it writes is not in the document, so candidates carry it.
+ */
+function withTagItem(text: string, offset: number, line: string): Rewrite | null {
+  const item = SEQ_ITEM_START.exec(line);
+  // An empty line between two items is a new item whose dash is not typed yet.
+  // Only between: SS14 writes a list's dashes at its key's indent, so a blank
+  // line after the last item is just as much the next key of the enclosing map.
+  const blank = item ? null : BLANK_LINE.exec(line);
+  if (!item && !(blank && nextLineIsItemAt(text, offset, blank[1]))) return null;
+
+  const indent = (item ?? blank)![1];
+  const start = lineStartAt(text, offset);
+  const rewritten = `${indent}- ${TYPE_TAG_PREFIX}`;
+
+  return {
+    text: text.slice(0, start) + rewritten + text.slice(start + line.length),
+    offset: start + rewritten.length,
+    expect: ['type-tag'],
+    accept: (ctx, schema) => polymorphicBaseOf(slotAt(ctx, schema), schema, true) !== null,
+    // `-!type:X` would be a scalar, not an item: re-supply the space — and on a
+    // blank line, the dash too.
+    insertPrefix: blank ? '- ' : item![2].length > 0 ? '' : ' ',
+  };
+}
+
+/** A line of indentation only. */
+const BLANK_LINE = /^([ \t]*)$/;
+
+/** Whether the next non-blank line after the caret's is a `- ` item at exactly `indent`. */
+function nextLineIsItemAt(text: string, offset: number, indent: string): boolean {
+  const rest = text.slice(text.indexOf('\n', offset) + 1 || text.length).split('\n');
+  const next = rest.find((candidate) => candidate.trim().length > 0);
+  return next !== undefined && next.startsWith(`${indent}-`) && !/^[ \t]/.test(next.slice(indent.length));
 }
 
 /**
@@ -624,6 +717,46 @@ function valueChoicesOf(
     if (constants) return { values: constants.map((entry) => entry.name), detail };
   }
   return { values: [], detail: undefined };
+}
+
+// ---------------------------------------------------------------------------
+// 7. union members
+// ---------------------------------------------------------------------------
+
+/**
+ * The polymorphic base a slot's value is declared as — a key of the schema's
+ * `polymorphicTypes` — or `null`. A tag can sit on a list item as well as on the
+ * field itself, so `throughList` reads a list through its element; an empty
+ * `key:` slot is the field's own value, and a list there takes items, not a tag.
+ */
+function polymorphicBaseOf(slot: Slot | null, schema: SchemaRoot, throughList: boolean): string | null {
+  if (!slot) return null;
+  const node = throughList ? itemOf(slot.node) : slot.node;
+  const base = node.fullType;
+  return base && schema.polymorphicTypes[base]?.length ? base : null;
+}
+
+/**
+ * The concrete members of `base` as `!type:` candidates: the short class name the
+ * engine resolves the tag by, the full name as its signature. The CLI lists only
+ * non-abstract implementors, so every one is a legal pick. Each inserts the
+ * whole tag — over `range` when one is written already.
+ */
+function memberCandidates(
+  base: string | null,
+  schema: SchemaRoot,
+  where: { readonly insertPrefix: string; readonly range?: readonly [number, number] },
+): CompletionCandidate[] {
+  if (!base) return [];
+  return schema.polymorphicTypes[base]
+    .map((member): CompletionCandidate => {
+      const label = shortTypeName(member);
+      const insertText = `${where.insertPrefix}${TYPE_TAG_PREFIX}${label}`;
+      return where.range
+        ? { label, kind: 'type', detail: member, insertText, range: where.range }
+        : { label, kind: 'type', detail: member, insertText };
+    })
+    .sort((a, b) => byLabel(a, b) || ((a.detail ?? '') < (b.detail ?? '') ? -1 : 1));
 }
 
 // ---------------------------------------------------------------------------
