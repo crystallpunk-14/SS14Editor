@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 
 import {
+  ClassLocator,
   completionsAt,
+  componentDefinitionAt,
   definitionAt,
   opensSuggestOnNewLine,
   reopensSuggestAfterDeletion,
@@ -9,6 +11,7 @@ import {
   type PrototypeIndexView,
   type SchemaRoot,
 } from '../core';
+import { createCsSourceTree } from './fork-fs';
 import type { ForkStatusController } from './fork-status-controller';
 import type { SchemaController } from './schema-controller';
 
@@ -29,21 +32,30 @@ import type { SchemaController } from './schema-controller';
  * {@link selectorFor} selector; VS Code serves a `DefinitionProvider` on both
  * Ctrl+Click and F12. Both also read the prototype index, which is consulted
  * per request rather than gating the registration: until it is ready, ids
- * simply have no candidates and no target. Hover (a later ticket) registers here
- * too.
+ * simply have no candidates and no target. The same provider jumps from a
+ * component name to its C# class (issue #31) through a {@link ClassLocator},
+ * which caches what it reads until the next schema change. Hover (a later
+ * ticket) registers here too.
  */
 export class TextProviderController implements vscode.Disposable {
   private registration: vscode.Disposable | undefined;
   /** Fork root the current registration is scoped to — so an unchanged status is a no-op. */
   private registeredRoot: string | undefined;
   private readonly disposables: vscode.Disposable[] = [];
+  /** Created on the first component jump; dropped on every schema change, when classes may have moved. */
+  private classLocator: ClassLocator | undefined;
 
   constructor(
     private readonly forkStatus: ForkStatusController,
     private readonly schema: SchemaController,
     private readonly prototypeIndex: PrototypeIndexView,
   ) {
-    this.disposables.push(this.schema.onDidChange(() => this.sync()));
+    this.disposables.push(
+      this.schema.onDidChange(() => {
+        this.classLocator = undefined;
+        this.sync();
+      }),
+    );
     this.sync();
   }
 
@@ -58,10 +70,14 @@ export class TextProviderController implements vscode.Disposable {
     this.registration?.dispose();
     this.registration = undefined;
     this.registeredRoot = wantedRoot;
+    // A locator reads one fork's sources; a new root needs a new one.
+    this.classLocator = undefined;
     if (!root || wantedRoot === undefined) return;
 
     const selector = selectorFor(root.uri);
     const getSchema = () => this.schema.schema;
+    const forkPath = root.uri.fsPath;
+    const getLocator = () => (this.classLocator ??= new ClassLocator(createCsSourceTree(forkPath)));
     this.registration = vscode.Disposable.from(
       vscode.languages.registerCompletionItemProvider(
         selector,
@@ -71,7 +87,7 @@ export class TextProviderController implements vscode.Disposable {
       ),
       vscode.languages.registerDefinitionProvider(
         selector,
-        new PrototypeDefinitionProvider(getSchema, this.prototypeIndex, root.uri),
+        new PrototypeDefinitionProvider(getSchema, this.prototypeIndex, getLocator, root.uri),
       ),
       triggerSuggestOnEdit(selector, getSchema, this.prototypeIndex),
     );
@@ -176,11 +192,16 @@ export class PrototypeCompletionProvider implements vscode.CompletionItemProvide
  * fork-relative path plus offsets, this opens that file to turn the offsets into
  * a range. Engine prototypes resolve the same way, into
  * `RobustToolbox/Resources/EnginePrototypes/`.
+ *
+ * On a component name it asks {@link componentDefinitionAt} for the class and
+ * the {@link ClassLocator} for its declarations instead — one link per part of a
+ * partial class, so VS Code jumps straight to a single one and peeks several.
  */
 export class PrototypeDefinitionProvider implements vscode.DefinitionProvider {
   constructor(
     private readonly getSchema: () => SchemaRoot | null,
     private readonly index: PrototypeIndexView,
+    private readonly getLocator: () => ClassLocator,
     private readonly forkRoot: vscode.Uri,
   ) {}
 
@@ -191,33 +212,57 @@ export class PrototypeDefinitionProvider implements vscode.DefinitionProvider {
     const schema = this.getSchema();
     if (!schema) return undefined;
 
-    const found = definitionAt(document.getText(), document.offsetAt(position), schema, this.index);
-    if (!found) return undefined;
+    const text = document.getText();
+    const offset = document.offsetAt(position);
+    const found = definitionAt(text, offset, schema, this.index);
+    if (found) {
+      const [start, , end] = found.target.range;
+      const link = await this.linkTo(document, found.origin, found.target.filePath, [start, end], [start, start]);
+      return link && [link];
+    }
 
-    const targetUri = vscode.Uri.joinPath(this.forkRoot, ...found.target.filePath.split('/'));
-    // Index offsets are into the BOM-stripped text, which is what a
-    // `TextDocument` holds too.
-    let target: vscode.TextDocument;
+    const component = componentDefinitionAt(text, offset, schema);
+    if (!component) return undefined;
+    const locations = await this.getLocator().locate(component.className);
+    const links = await Promise.all(
+      locations.map((location) => {
+        const name: [number, number] = [location.offset, location.offset + location.name.length];
+        return this.linkTo(document, component.origin, location.filePath, name, name);
+      }),
+    );
+    const opened = links.filter((link) => link !== undefined);
+    return opened.length > 0 ? opened : undefined;
+  }
+
+  /**
+   * A link from `origin` in `document` to `[start, end)` offsets of a
+   * fork-relative file — `undefined` when that file can no longer be opened (it
+   * went away since it was indexed or listed). Core offsets are into the
+   * BOM-stripped text, which is what a `TextDocument` holds too.
+   */
+  private async linkTo(
+    document: vscode.TextDocument,
+    origin: readonly [number, number],
+    filePath: string,
+    target: readonly [number, number],
+    selection: readonly [number, number],
+  ): Promise<vscode.LocationLink | undefined> {
+    const targetUri = vscode.Uri.joinPath(this.forkRoot, ...filePath.split('/'));
+    let file: vscode.TextDocument;
     try {
-      target = await vscode.workspace.openTextDocument(targetUri);
+      file = await vscode.workspace.openTextDocument(targetUri);
     } catch {
-      // The file went away since it was indexed; the watcher will drop it.
       return undefined;
     }
-    const [start, , end] = found.target.range;
-    const head = target.positionAt(start);
+    const range = ([start, end]: readonly [number, number]) =>
+      new vscode.Range(file.positionAt(start), file.positionAt(end));
 
-    return [
-      {
-        originSelectionRange: new vscode.Range(
-          document.positionAt(found.origin[0]),
-          document.positionAt(found.origin[1]),
-        ),
-        targetUri,
-        targetRange: new vscode.Range(head, target.positionAt(end)),
-        targetSelectionRange: new vscode.Range(head, head),
-      },
-    ];
+    return {
+      originSelectionRange: new vscode.Range(document.positionAt(origin[0]), document.positionAt(origin[1])),
+      targetUri,
+      targetRange: range(target),
+      targetSelectionRange: range(selection),
+    };
   }
 }
 

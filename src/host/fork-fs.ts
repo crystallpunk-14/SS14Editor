@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import type { ForkFs } from '../core';
+import type { CsSourceTree, ForkFs } from '../core';
 
 /** Run `fn`, returning `fallback` if it throws (missing path, permission, not a repo). */
 function orElse<T>(fn: () => T, fallback: T): T {
@@ -11,6 +11,20 @@ function orElse<T>(fn: () => T, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+/** Options for every `git ls-files` run here. */
+const GIT_OPTIONS = {
+  encoding: 'utf8',
+  windowsHide: true,
+  maxBuffer: 64 * 1024 * 1024,
+  // Runs on (or blocks) the extension-host thread; never let a wedged git hang it.
+  timeout: 10_000,
+} as const;
+
+/** The paths of `git ls-files -z` output. */
+function nulSeparated(stdout: string): string[] {
+  return stdout.split('\0').filter((entry) => entry.length > 0);
 }
 
 /**
@@ -36,15 +50,30 @@ export function createForkFs(rootPath: string): ForkFs {
     // when the fork root sits inside a larger repo. `undefined` (git missing or
     // not a repo) means staleness is unprovable.
     gitLsFiles: (relPath) =>
-      orElse<string[] | undefined>(() => {
-        const stdout = execFileSync('git', ['-C', rootPath, 'ls-files', '-z', '--', relPath], {
-          encoding: 'utf8',
-          windowsHide: true,
-          maxBuffer: 64 * 1024 * 1024,
-          // Runs on the extension-host thread; never let a wedged git freeze it.
-          timeout: 10_000,
-        });
-        return stdout.split('\0').filter((entry) => entry.length > 0);
-      }, undefined),
+      orElse<string[] | undefined>(
+        () => nulSeparated(execFileSync('git', ['-C', rootPath, 'ls-files', '-z', '--', relPath], GIT_OPTIONS)),
+        undefined,
+      ),
+  };
+}
+
+/**
+ * The fork's C# sources for the class locator (issue #31): one asynchronous
+ * `git ls-files --recurse-submodules` (so `RobustToolbox/` is listed too) and
+ * plain file reads. Asynchronous because it runs on a go-to-definition request,
+ * and the locator may read thousands of files on a full scan.
+ */
+export function createCsSourceTree(rootPath: string): CsSourceTree {
+  return {
+    listFiles: () =>
+      new Promise((resolve) => {
+        execFile(
+          'git',
+          ['-C', rootPath, 'ls-files', '-z', '--recurse-submodules', '--', '*.cs'],
+          GIT_OPTIONS,
+          (error, stdout) => resolve(error ? undefined : nulSeparated(stdout)),
+        );
+      }),
+    readFile: (relPath) => fs.promises.readFile(path.join(rootPath, relPath), 'utf8').catch(() => undefined),
   };
 }

@@ -52,6 +52,34 @@ export function definitionAt(
   return lookup.ready && lookup.record ? { origin, target: lookup.record } : null;
 }
 
+/** A component class to jump to, and which text it was asked from. */
+export interface ComponentDefinition {
+  /** `[start, end)` of the component name under the caret. */
+  readonly origin: readonly [number, number];
+  /** The component's full C# class name, from the schema — for `ClassLocator.locate`. */
+  readonly className: string;
+}
+
+/**
+ * The class of the component named under the caret — the value of a
+ * component-registry entry's `type:` (issue #31). `null` off such a name, or for
+ * a name the schema does not know. Where that class is declared is the
+ * `ClassLocator`'s question (./class-location.ts), asked by the host.
+ */
+export function componentDefinitionAt(text: string, offset: number, schema: SchemaRoot): ComponentDefinition | null {
+  const file = parsePrototypeFile(text);
+  if (!file.ok) return null;
+
+  const { token } = contextAt(file, offset, schema);
+  if (token.kind !== 'component-type' || token.text === null) return null;
+
+  const component = Object.hasOwn(schema.components, token.text) ? schema.components[token.text] : undefined;
+  if (!component) return null;
+
+  const origin = idSpanAt(file.text, offset);
+  return origin ? { origin, className: component.className } : null;
+}
+
 /**
  * A character that can be part of an id as written in YAML: anything but
  * whitespace, the flow-collection punctuation, quotes, `:` and `#`. That spans

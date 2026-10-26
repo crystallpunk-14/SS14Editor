@@ -80,8 +80,10 @@ export type {
 
 export { completionsAt, opensSuggestOnNewLine, reopensSuggestAfterDeletion } from './completion';
 export type { CompletionCandidate } from './completion';
-export { definitionAt } from './definition';
-export type { DefinitionTarget } from './definition';
+export { componentDefinitionAt, definitionAt } from './definition';
+export type { ComponentDefinition, DefinitionTarget } from './definition';
+export { ClassLocator, classDeclarationsIn } from './class-location';
+export type { ClassDeclaration, ClassLocation, CsSourceTree } from './class-location';
 
 export {
   parsePrototypeFile,
