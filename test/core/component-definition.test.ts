@@ -302,7 +302,7 @@ describe('classDefinitionAt — a `!type:` tag under the caret', () => {
   it("names the union member a list item's tag picks, spanning the name only", () => {
     const [start, end] = nameSpan(claw.text, 'WeaponArcAttack');
 
-    expect(classDefinitionAt(claw.text, start + 3, SCHEMA)).toEqual({
+    expect(classDefinitionAt(claw.text, start + 3, SCHEMA)).toMatchObject({
       origin: [start, end],
       className: 'Content.Shared._CE.EntityEffect.Effects.WeaponArcAttack',
     });
@@ -353,7 +353,7 @@ describe('classDefinitionAt — the component name under the caret', () => {
   it('names the class of a content component and spans the written name', () => {
     const offset = TEXT.indexOf('Damageable') + 3;
 
-    expect(classDefinitionAt(TEXT, offset, SCHEMA)).toEqual({
+    expect(classDefinitionAt(TEXT, offset, SCHEMA)).toMatchObject({
       origin: [TEXT.indexOf('Damageable'), TEXT.indexOf('Damageable') + 'Damageable'.length],
       className: SCHEMA.components.Damageable.className,
     });

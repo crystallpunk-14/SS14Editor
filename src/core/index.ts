@@ -82,6 +82,8 @@ export { completionsAt, opensSuggestOnNewLine, reopensSuggestAfterDeletion } fro
 export type { CompletionCandidate } from './completion';
 export { classDefinitionAt, definitionAt } from './definition';
 export type { ClassDefinition, DefinitionTarget } from './definition';
+export { hoverAt, hoverMarkdown, readableTypeName } from './hover';
+export type { ClassHover, FieldHover, HoverContent } from './hover';
 export { ClassLocator, classDeclarationsIn } from './class-location';
 export type { ClassDeclaration, ClassLocation, CsSourceTree } from './class-location';
 

@@ -5,6 +5,8 @@ import {
   completionsAt,
   classDefinitionAt,
   definitionAt,
+  hoverAt,
+  hoverMarkdown,
   opensSuggestOnNewLine,
   reopensSuggestAfterDeletion,
   type CompletionCandidate,
@@ -34,8 +36,8 @@ import type { SchemaController } from './schema-controller';
  * per request rather than gating the registration: until it is ready, ids
  * simply have no candidates and no target. The same provider jumps from a
  * component name or a `!type:` tag to its C# class (issue #31) through a {@link ClassLocator},
- * which caches what it reads until the next schema change. Hover (a later
- * ticket) registers here too.
+ * which caches what it reads until the next schema change. Hover (issue #30)
+ * registers on the same selector and reads the schema alone.
  */
 export class TextProviderController implements vscode.Disposable {
   private registration: vscode.Disposable | undefined;
@@ -89,6 +91,7 @@ export class TextProviderController implements vscode.Disposable {
         selector,
         new PrototypeDefinitionProvider(getSchema, this.prototypeIndex, getLocator, root.uri),
       ),
+      vscode.languages.registerHoverProvider(selector, new PrototypeHoverProvider(getSchema)),
       triggerSuggestOnEdit(selector, getSchema, this.prototypeIndex),
     );
   }
@@ -263,6 +266,28 @@ export class PrototypeDefinitionProvider implements vscode.DefinitionProvider {
       targetRange: range(target),
       targetSelectionRange: range(selection),
     };
+  }
+}
+
+/**
+ * Thin adapter over {@link hoverAt}: the core names what the caret is on and
+ * renders it ({@link hoverMarkdown}); this only wraps the markdown in a `Hover`
+ * over the name it was asked from.
+ */
+export class PrototypeHoverProvider implements vscode.HoverProvider {
+  constructor(private readonly getSchema: () => SchemaRoot | null) {}
+
+  provideHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
+    const schema = this.getSchema();
+    if (!schema) return undefined;
+
+    const hover = hoverAt(document.getText(), document.offsetAt(position), schema);
+    if (!hover) return undefined;
+    const [start, end] = hover.origin;
+    return new vscode.Hover(
+      new vscode.MarkdownString(hoverMarkdown(hover)),
+      new vscode.Range(document.positionAt(start), document.positionAt(end)),
+    );
   }
 }
 

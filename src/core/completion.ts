@@ -678,6 +678,16 @@ export function protoRefKindAt(ctx: CursorContext, schema: SchemaRoot): string |
   return slot ? protoRefKind(slot, ctx.prototypeType) : null;
 }
 
+/**
+ * The declared field the caret's key names (hover, issue #30) — resolved the
+ * same way field completion resolves its container, `!type:` tags on the way
+ * included. `null` off a key, for a key the schema has no field by, and for a
+ * dictionary entry's key, which is data rather than a field.
+ */
+export function fieldAt(ctx: CursorContext, schema: SchemaRoot): FieldMetadata | null {
+  return ctx.token.kind === 'key' ? slotAt(ctx, schema)?.field ?? null : null;
+}
+
 /** The `type:` of `EntityPrototype` — what every `EntProtoId` names. */
 const ENTITY_KIND = 'entity';
 

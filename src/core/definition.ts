@@ -15,7 +15,7 @@
 
 import { contextAt, protoRefKindAt, typeTagMemberAt } from './completion';
 import type { PrototypeIndexView, PrototypeRecord } from './prototype-index';
-import { parsePrototypeFile } from './prototype-yaml';
+import { parsePrototypeFile, type CursorContext, type PrototypeFile } from './prototype-yaml';
 import type { SchemaRoot } from './schema-contract';
 
 /** Where to jump, and which text it was asked from. */
@@ -58,6 +58,10 @@ export interface ClassDefinition {
   readonly origin: readonly [number, number];
   /** The class's full C# name, from the schema — for `ClassLocator.locate`. */
   readonly className: string;
+  /** What names it: a component's `type:` value, or a `!type:` tag. */
+  readonly kind: 'component' | 'type';
+  /** The name as written — a component's registration name, a tag's member name. */
+  readonly name: string;
 }
 
 /**
@@ -69,9 +73,19 @@ export interface ClassDefinition {
  */
 export function classDefinitionAt(text: string, offset: number, schema: SchemaRoot): ClassDefinition | null {
   const file = parsePrototypeFile(text);
-  if (!file.ok) return null;
+  return file.ok ? classAt(file, contextAt(file, offset, schema), offset, schema) : null;
+}
 
-  const ctx = contextAt(file, offset, schema);
+/**
+ * {@link classDefinitionAt} over an already-read cursor context — for hover
+ * (issue #30), which asks the same context about fields too.
+ */
+export function classAt(
+  file: PrototypeFile,
+  ctx: CursorContext,
+  offset: number,
+  schema: SchemaRoot,
+): ClassDefinition | null {
   const { token } = ctx;
 
   if (token.kind === 'type-tag') {
@@ -79,7 +93,7 @@ export function classDefinitionAt(text: string, offset: number, schema: SchemaRo
     if (!member || token.text === null) return null;
     // The name ends the tag: `!type:<name>`.
     const end = token.range[1];
-    return { origin: [end - token.text.length, end], className: member };
+    return { origin: [end - token.text.length, end], className: member, kind: 'type', name: token.text };
   }
 
   if (token.kind !== 'component-type' || token.text === null) return null;
@@ -87,7 +101,7 @@ export function classDefinitionAt(text: string, offset: number, schema: SchemaRo
   if (!component) return null;
 
   const origin = idSpanAt(file.text, offset);
-  return origin ? { origin, className: component.className } : null;
+  return origin ? { origin, className: component.className, kind: 'component', name: token.text } : null;
 }
 
 /**
@@ -98,7 +112,7 @@ export function classDefinitionAt(text: string, offset: number, schema: SchemaRo
 const ID_CHAR = /[^\s,[\]{}:#'"]/;
 
 /** The run of {@link ID_CHAR}s the caret touches, or `null` when it touches none. */
-function idSpanAt(text: string, offset: number): [number, number] | null {
+export function idSpanAt(text: string, offset: number): [number, number] | null {
   let start = offset;
   while (start > 0 && ID_CHAR.test(text[start - 1])) start--;
   let end = offset;
