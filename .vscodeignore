@@ -1,6 +1,8 @@
 # The TS is bundled into dist/ by esbuild; the schema extractor is published
-# into assets/schema-cli/ by `npm run build:schema-cli`. Ship both of those,
-# nothing else. assets/ is intentionally NOT excluded here.
+# into assets/schema-cli/ by `npm run build:schema-cli`. Ship those, the
+# Marketplace page files (README, CHANGELOG, LICENSE) and the icon with its
+# attribution (assets/icon.*), nothing else. assets/ is intentionally NOT
+# excluded here.
 .github/**
 .vscode/**
 .vscode-test/**

@@ -1,3 +1,5 @@
+import { rmSync } from 'node:fs';
+
 import * as esbuild from 'esbuild';
 
 const watch = process.argv.includes('--watch');
@@ -56,5 +58,8 @@ if (watch) {
   await Promise.all(contexts.map((c) => c.watch()));
   console.log('esbuild: watching host, worker, smoke bundles...');
 } else {
+  // `vsce package` ships all of dist/, so start from an empty one: a bundle
+  // whose entry point was removed would otherwise ride along in the .vsix.
+  rmSync('dist', { recursive: true, force: true });
   await Promise.all(configs.map((c) => esbuild.build(c)));
 }

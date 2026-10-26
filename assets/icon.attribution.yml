@@ -1,0 +1,6 @@
+# assets/icon.png is icon-256x256.png from Space Station 14,
+# Resources/Textures/Logo/icon/, copied unmodified.
+- files: ["icon.png"]
+  license: "CC-BY-SA-4.0"
+  copyright: "By AftrLite"
+  source: "https://github.com/space-wizards/space-station-14/pull/44473/"

@@ -1,66 +1,50 @@
 # SS14 Prototype Editor
 
-VS Code extension for editing SS14 (RobustToolbox) YAML prototypes with schema
-awareness. The extension lives at the repo root; see `CONTEXT.md` and `docs/`
-for the domain model and design decisions, and issue
-[#20](https://github.com/crystallpunk-14/SS14Editor/issues/20) for the v1 spec.
+Autocomplete, hover docs and go-to-definition for Space Station 14 YAML
+prototypes, built from any SS14 fork's code.
 
-## Status
+## Features
 
-Issues [#21](https://github.com/crystallpunk-14/SS14Editor/issues/21) (skeleton),
-[#23](https://github.com/crystallpunk-14/SS14Editor/issues/23) (fork detection)
-and [#25](https://github.com/crystallpunk-14/SS14Editor/issues/25) (schema
-connection): the extension runs fork detection on the workspace root and reports
-to the **SS14 Editor** Output channel either the single concrete reason the
-folder is not a built fork (no `RobustToolbox` submodule, no `Content.Server` /
-`Content.Client` / `Resources/Prototypes`, no DLLs in `bin/Content.*`, or a stale
-build) or, once it is, the schema and prototype-index verdicts. The Output
-channel is the only status surface: no sidebar view, status-bar item or toast
-(issue [#45](https://github.com/crystallpunk-14/SS14Editor/issues/45) dropped the
-inspector sidebar from v1).
+- **Component names.** Completion after `- type:` lists every component your
+  fork defines, including the ones only your fork has.
+- **Fields.** Completion of field names inside a component, a nested data
+  definition or the prototype itself (`entity`, `reagent` and every other
+  prototype type). Fields already written in the block are not offered again.
+- **Values.** Completion of `true`/`false`, enum and flag values, prototype
+  types after the top-level `type:`, and the classes allowed after a `!type:`
+  tag.
+- **Prototype ids.** Completion of ids in `parent:` and in any field that
+  references a prototype, filtered to the right kind: entities where an entity
+  is expected, reagents where a reagent is expected. Engine prototypes from
+  `RobustToolbox` are included.
+- **Resource paths.** Completion of files and folders under `Resources/` in
+  fields that take a resource path. New files show up right away.
+- **Hover.** Hover over a component name, a field or a `!type:` tag to see its
+  description from the C# docs, its type and its default value.
+- **Go to definition.** Ctrl+Click or F12 on a prototype id jumps to the
+  prototype's declaration; on a component name or a `!type:` tag it jumps to
+  the C# class.
+- **Stays current.** After you rebuild the fork, new components and fields
+  appear without restarting VS Code. Saving a prototype file makes its ids
+  available everywhere at once.
 
-On a recognised fork the host runs the bundled schema extractor
-(`dotnet assets/schema-cli/SS14Editor.SchemaCli.dll <forkRoot> <cacheDir>`),
-caching its `metadata.json` under
-`globalStorageUri/schema/<fork>-<hash>/` — never in the fork tree. It re-runs on
-activation, on a debounced change to `bin/Content.{Server,Client}/*.dll`, and on
-the **SS14: Rebuild schema** command; the CLI fingerprints its inputs and no-ops
-when nothing changed. The parsed schema stays in memory for the provider tickets;
-a `schemaVersion` the extension does not expect is reported as incompatible and
-keeps providers down. Completion, hover and go-to-definition in prototype YAML are
-the extension's only editing surface.
+The extension never rewrites your files and never writes anything into the
+fork folder.
 
-## Layout
+## Getting started
 
-| Path          | Layer                                                                       |
-| ------------- | -------------------------------------------------------------------------- |
-| `src/core/`   | Pure TypeScript. **No `vscode` import** — the single test seam (lint-enforced). Fork detection, YAML core, and the schema contract + `interpretSchemaResult` verdict live here. |
-| `src/host/`   | Thin VS Code adapter: activation, provider registration, the real-FS `ForkFs`, running the schema CLI (`schema-controller.ts`), the prototype-index worker, status logging. |
-| `assets/`     | Build output shipped in the `.vsix` — the published schema extractor (`assets/schema-cli/`). Git-ignored; produced by `npm run build:schema-cli`. |
+1. Build your SS14 fork once (`dotnet build`), as you would to run it.
+2. Open the fork's root folder in VS Code (the one with `RobustToolbox`,
+   `Content.Server` and `Resources`).
+3. Open any prototype file under `Resources/Prototypes/` and start typing.
 
-`esbuild.mjs` produces three independent bundles: `dist/extension.js` (host,
-CommonJS), `dist/prototype-index-worker.js` (the index worker thread, CommonJS),
-and `out/test/smoke/` (the activation test).
+There is nothing to configure. The first start on a fork takes a little while;
+later starts are fast.
 
-## Commands
+If suggestions don't appear, open **View → Output** and pick **SS14 Editor**
+in the dropdown: it says what the extension is waiting for, for example that
+the fork needs a rebuild. Two commands in the Command Palette (Ctrl+Shift+P)
+start things over:
 
-```sh
-npm install
-npm run typecheck        # tsc --noEmit
-npm run lint             # eslint (incl. the core/vscode import boundary)
-npm run test:core        # vitest — fast, no VS Code
-npm run test:smoke       # @vscode/test-electron activation smoke test
-npm run build            # esbuild: host + worker + smoke bundles
-npm run build:schema-cli # dotnet publish the extractor into assets/schema-cli/
-npm run package          # build + build:schema-cli + vsce package -> ss14editor.vsix
-```
-
-## Schema extractor
-
-The v1 spec pairs this extension with the vendored C# CLI in
-[`schema-cli/`](schema-cli/) that extracts the schema from a fork's
-compiled DLLs (issue #22). CI (`.github/workflows/ci.yml`) runs
-`dotnet publish -c Release` into `assets/schema-cli/` before the bundle
-step, so the `.vsix` carries it. For a local F5 run against a real fork, run
-`npm run build:schema-cli` once first — without it the Output channel reports
-the extractor as not bundled.
+- **SS14: Rebuild schema** re-reads components and fields from the built fork.
+- **SS14: Rebuild prototype index** re-reads all prototype files.

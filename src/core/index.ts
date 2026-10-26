@@ -6,7 +6,7 @@
  */
 
 export const EXTENSION_ID = 'ss14editor';
-export const PUBLISHER = 'crystallpunk-14';
+export const PUBLISHER = 'TheShuEd';
 
 /** Fully-qualified extension identifier as VS Code reports it. */
 export const QUALIFIED_EXTENSION_ID = `${PUBLISHER}.${EXTENSION_ID}`;

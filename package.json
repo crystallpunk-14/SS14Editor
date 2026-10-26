@@ -1,14 +1,26 @@
 {
   "name": "ss14editor",
   "displayName": "SS14 Prototype Editor",
-  "description": "Schema-aware editing for SS14 (RobustToolbox) YAML prototypes.",
-  "version": "0.0.1",
+  "description": "Autocomplete, hover docs and go-to-definition for Space Station 14 YAML prototypes, built from your fork's code.",
+  "version": "1.0.0",
   "license": "MIT",
-  "publisher": "crystallpunk-14",
+  "publisher": "TheShuEd",
   "private": true,
+  "icon": "assets/icon.png",
+  "keywords": [
+    "ss14",
+    "space station 14",
+    "robust toolbox",
+    "prototypes",
+    "yaml"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/crystallpunk-14/SS14Editor.git"
+  },
+  "homepage": "https://github.com/crystallpunk-14/SS14Editor#readme",
+  "bugs": {
+    "url": "https://github.com/crystallpunk-14/SS14Editor/issues"
   },
   "engines": {
     "vscode": "^1.49.0"
@@ -37,7 +49,7 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "node esbuild.mjs",
-    "build:schema-cli": "dotnet publish schema-cli/SS14Editor.SchemaCli.csproj -c Release -o assets/schema-cli",
+    "build:schema-cli": "node -e \"require('fs').rmSync('assets/schema-cli',{recursive:true,force:true})\" && dotnet publish schema-cli/SS14Editor.SchemaCli.csproj -c Release -o assets/schema-cli",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

@@ -11,6 +11,9 @@
     <TargetFramework>net8.0</TargetFramework>
     <RollForward>LatestMajor</RollForward>
     <SelfContained>false</SelfContained>
+    <!-- No native apphost (`.exe` on Windows): it would make the .vsix depend
+         on the OS it was packaged on, and the plugin never launches it. -->
+    <UseAppHost>false</UseAppHost>
 
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
