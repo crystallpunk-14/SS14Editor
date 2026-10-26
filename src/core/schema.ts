@@ -1,7 +1,7 @@
 /**
  * Schema loading — pure core (spec #20, "Схема: контракт, кэш, инвалидация";
  * issue #25). No `vscode`, no host adapter: it turns the raw result of one CLI
- * invocation into a panel-ready verdict, and owns the cache-directory naming.
+ * invocation into a user-facing verdict, and owns the cache-directory naming.
  *
  * The extension always runs the CLI and never second-guesses freshness itself —
  * the CLI fingerprints its inputs and no-ops in tens of milliseconds when
@@ -134,7 +134,7 @@ export interface SchemaResultInput {
 /**
  * The extension's single read of the schema, mirroring {@link
  * import('./fork-detection').ForkStatus}: one `state` discriminant and a
- * `message` on every variant so the panel can show it verbatim, in the same
+ * `message` on every variant so it can be logged verbatim, in the same
  * unified state as a fork-detection problem (spec #20 — "не тост, не модалка").
  */
 export type SchemaStatus =
@@ -162,7 +162,7 @@ const REBUILD_HINT = 'Run "SS14: Rebuild schema" to try again.';
 /** dotnet's message when a net8.0 app meets a runtime older than 8. */
 const RUNTIME_TOO_OLD = /you must install or update \.net/i;
 
-/** Cap panel stderr so a runaway dump can't fill the sidebar; keeps line breaks. */
+/** Cap stderr so a runaway dump can't flood the log; keeps line breaks. */
 function clip(text: string, max = 800): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }

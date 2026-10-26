@@ -8,13 +8,13 @@ import {
   indexBuilding,
   indexFailed,
   indexReady,
+  indexStatusLog,
   PROTOTYPE_ROOTS,
   PrototypeIndex,
   schemaCacheDirName,
   type IndexStatus,
   type RecordDiff,
 } from '../core';
-import type { IndexStatusMessage } from '../shared/protocol';
 import type { ForkStatusController } from './fork-status-controller';
 import type { FromWorker, ToWorker } from './prototype-index-worker';
 
@@ -35,7 +35,7 @@ type ForkRoot = NonNullable<ReturnType<ForkStatusController['recognizedRoot']>>;
  *
  *   - Builds in a worker thread ({@link import('./prototype-index-worker')}) —
  *     a cache hit at activation, a cold parse otherwise — so the Extension Host
- *     stays responsive; the panel shows progress, then the count.
+ *     stays responsive; the Output channel logs the start, then the count.
  *   - Until the first load, {@link index} answers lookups with "not ready".
  *   - The cache fingerprint takes `EXPECTED_SCHEMA_VERSION`: a loaded schema of
  *     any other version is `incompatible` (issue #25), so the two never differ
@@ -58,9 +58,8 @@ export class PrototypeIndexController implements vscode.Disposable {
   private pendingPaths = new Set<string>();
   private updateTimer: ReturnType<typeof setTimeout> | undefined;
 
-  private view: vscode.WebviewView | undefined;
-  private viewBinding: vscode.Disposable | undefined;
-  private status: IndexStatus | null = null;
+  /** `undefined` until the first status is reported, so that first one is always logged. */
+  private status: IndexStatus | null | undefined = undefined;
 
   private readonly disposables: vscode.Disposable[] = [];
   private readonly updateEmitter = new vscode.EventEmitter<RecordDiff | undefined>();
@@ -81,15 +80,6 @@ export class PrototypeIndexController implements vscode.Disposable {
       this.forkStatus.onDidChange(() => this.onForkStatusChanged()),
     );
     this.onForkStatusChanged();
-  }
-
-  bind(view: vscode.WebviewView): void {
-    this.view = view;
-    this.viewBinding?.dispose();
-    this.viewBinding = view.onDidChangeVisibility(() => {
-      if (view.visible) this.push();
-    });
-    this.push();
   }
 
   /** The `SS14: Rebuild prototype index` command: a cold parse that ignores the cache. */
@@ -220,25 +210,18 @@ export class PrototypeIndexController implements vscode.Disposable {
         this.log.appendLine(`[index] ${message.message}`);
         break;
       case 'failed':
-        this.log.appendLine(`[index] failed: ${message.reason}`);
         this.setStatus(indexFailed(message.reason));
         break;
     }
   }
 
   private setStatus(status: IndexStatus | null): void {
+    for (const line of indexStatusLog(this.status, status)) this.log.appendLine(line);
     this.status = status;
-    this.push();
-  }
-
-  private push(): void {
-    const message: IndexStatusMessage = { type: 'indexStatus', status: this.status };
-    void this.view?.webview.postMessage(message);
   }
 
   dispose(): void {
     this.stop();
-    this.viewBinding?.dispose();
     for (const disposable of this.disposables) disposable.dispose();
   }
 }

@@ -8,12 +8,12 @@ import {
   interpretSchemaResult,
   parseSchemaDocument,
   schemaCacheDirName,
+  schemaStatusLog,
   type SchemaParse,
   type SchemaRoot,
   type SchemaRunOutcome,
   type SchemaStatus,
 } from '../core';
-import type { SchemaStatusMessage } from '../shared/protocol';
 import type { ForkStatusController } from './fork-status-controller';
 
 /**
@@ -28,9 +28,9 @@ import type { ForkStatusController } from './fork-status-controller';
  *     the fork tree;
  *   - never guesses freshness itself — the CLI fingerprints its inputs and
  *     no-ops in tens of milliseconds when nothing changed;
- *   - turns the run into one panel-ready {@link SchemaStatus} (pure core), in
- *     the same unified panel state as a fork-detection problem — no toast, no
- *     modal;
+ *   - turns the run into one {@link SchemaStatus} (pure core) and reports every
+ *     change of it to the "SS14 Editor" Output channel, like a fork-detection
+ *     problem — no status bar, no toast, no modal (issue #45);
  *   - keeps the parsed {@link SchemaRoot} in memory for the provider tickets,
  *     and drops it whenever the status is anything but `loaded` so providers
  *     stay down on an incompatible or failed schema.
@@ -40,11 +40,10 @@ const DLL_DEBOUNCE_MS = 600;
 const CLI_TIMEOUT_MS = 120_000;
 
 export class SchemaController implements vscode.Disposable {
-  private view: vscode.WebviewView | undefined;
-  private viewBinding: vscode.Disposable | undefined;
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
-  private status: SchemaStatus | null = null;
+  /** `undefined` until the first status is reported, so that first one is always logged. */
+  private status: SchemaStatus | null | undefined = undefined;
   private schemaRoot: SchemaRoot | null = null;
 
   /** Non-null while an extractor run is in flight; a request during a run re-runs after it. */
@@ -64,6 +63,7 @@ export class SchemaController implements vscode.Disposable {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly forkStatus: ForkStatusController,
+    private readonly log: vscode.OutputChannel,
   ) {
     const dllWatcher = vscode.workspace.createFileSystemWatcher(
       '**/bin/Content.{Server,Client}/*.dll',
@@ -93,16 +93,6 @@ export class SchemaController implements vscode.Disposable {
     return this.schemaRoot;
   }
 
-  /** Attach the live webview and push the current status; re-push when it reappears. */
-  bind(view: vscode.WebviewView): void {
-    this.view = view;
-    this.viewBinding?.dispose();
-    this.viewBinding = view.onDidChangeVisibility(() => {
-      if (view.visible) this.push();
-    });
-    this.push();
-  }
-
   /** The `SS14: Rebuild schema` command. Bypasses the debounce; the CLI still no-ops if inputs are unchanged. */
   rebuild(): void {
     void this.requestRun();
@@ -110,8 +100,8 @@ export class SchemaController implements vscode.Disposable {
 
   private onForkStatusChanged(): void {
     if (!this.forkStatus.recognizedRoot()) {
-      // Nothing to extract from. Clear the schema and let the panel fall back
-      // to the fork-detection message.
+      // Nothing to extract from. Clear the schema; the fork-detection line in
+      // the log already says why.
       this.debounceCancel();
       this.setStatus(null);
       return;
@@ -193,20 +183,14 @@ export class SchemaController implements vscode.Disposable {
   }
 
   private setStatus(status: SchemaStatus | null): void {
+    for (const line of schemaStatusLog(this.status, status)) this.log.appendLine(line);
     this.status = status;
     if (status === null) this.schemaRoot = null;
-    this.push();
     this.changeEmitter.fire();
-  }
-
-  private push(): void {
-    const message: SchemaStatusMessage = { type: 'schemaStatus', status: this.status };
-    void this.view?.webview.postMessage(message);
   }
 
   dispose(): void {
     this.debounceCancel();
-    this.viewBinding?.dispose();
     for (const disposable of this.disposables) disposable.dispose();
   }
 }

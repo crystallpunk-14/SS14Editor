@@ -32,25 +32,7 @@
         "title": "Rebuild prototype index",
         "category": "SS14"
       }
-    ],
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "ss14editor",
-          "title": "SS14 Editor",
-          "icon": "media/icon.svg"
-        }
-      ]
-    },
-    "views": {
-      "ss14editor": [
-        {
-          "id": "ss14editor.inspector",
-          "name": "Inspector",
-          "type": "webview"
-        }
-      ]
-    }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run build",

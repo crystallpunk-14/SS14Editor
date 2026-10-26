@@ -41,7 +41,7 @@ jobs:
       - name: Core tests
         run: npm run test:core
 
-      - name: Bundle (host + webview)
+      - name: Bundle (host + worker)
         run: npm run build
 
       - name: Activation smoke test

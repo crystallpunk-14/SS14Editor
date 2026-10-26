@@ -34,7 +34,7 @@ function nulSeparated(stdout: string): string[] {
  * rule lives in the pure core; here we only answer its questions with `node:fs`
  * and one `git ls-files` call. All operations are synchronous: they run at
  * activation over a handful of paths, and detection must produce a result before
- * the panel can render.
+ * the schema and index can start.
  */
 export function createForkFs(rootPath: string): ForkFs {
   const abs = (relPath: string): string => path.join(rootPath, relPath);

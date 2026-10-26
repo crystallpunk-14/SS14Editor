@@ -55,18 +55,24 @@ export interface ForkRecognized {
 export interface StaleBuild {
   /** Which `Content.*` projects have sources newer than their DLLs. */
   projects: string[];
-  /** Human-readable, panel-ready warning. */
+  /** Human-readable warning, logged verbatim. */
   message: string;
 }
 
 export interface ForkUnrecognized {
   recognized: false;
   code: ForkProblemCode;
-  /** Human-readable, panel-ready explanation of the single blocking reason. */
+  /** Human-readable, user-facing explanation of the single blocking reason. */
   message: string;
 }
 
 export type ForkStatus = ForkRecognized | ForkUnrecognized;
+
+/** The workspace folder that was checked, plus the verdict for it. */
+export interface ForkFolderStatus {
+  name: string;
+  status: ForkStatus;
+}
 
 /** The two projects whose DLLs the schema extractor reads, in check order. */
 const CONTENT_PROJECTS = ['Content.Server', 'Content.Client'] as const;
@@ -74,7 +80,7 @@ const CONTENT_PROJECTS = ['Content.Server', 'Content.Client'] as const;
 /**
  * Classify one fork-root candidate. Checks run in the order the spec lists the
  * signals, so when several things are wrong the earliest (most fundamental) one
- * is what the panel reports.
+ * is what gets reported.
  */
 export function detectFork(fs: ForkFs): ForkStatus {
   const gitmodules = fs.readFile('.gitmodules');

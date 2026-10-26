@@ -324,7 +324,7 @@ describe('index cache', () => {
 });
 
 describe('index status', () => {
-  it('carries a panel-ready message for progress, the final count, and failures', () => {
+  it('carries a user-facing message for progress, the final count, and failures', () => {
     expect(indexBuilding(10, 100).message).toBe('Indexing prototypes… 10/100 files');
     expect(indexReady(25200, 0).message).toBe('Prototype index: 25200 prototypes.');
     expect(indexReady(3, 2).message).toBe('Prototype index: 3 prototypes (2 unparseable files skipped).');

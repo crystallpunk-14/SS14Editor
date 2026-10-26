@@ -99,8 +99,8 @@ export interface DataDefinitionMetadata {
 /**
  * The whole schema document: the predecessor's `MetadataRoot` verbatim plus the
  * two contract roots the CLI splices in front (`schemaVersion`,
- * `sourceFingerprint`). This is the single in-memory object the inspector and
- * text providers of later tickets read.
+ * `sourceFingerprint`). This is the single in-memory object the text providers
+ * read.
  */
 export interface SchemaRoot {
   readonly schemaVersion: number;

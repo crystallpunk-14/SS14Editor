@@ -40,7 +40,7 @@ export default tseslint.config(
                 'The core layer must not depend on the vscode API — it is the pure, VS-Code-free test seam.',
             },
           ],
-          patterns: ['**/host/**', '**/webview/**'],
+          patterns: ['**/host/**'],
         },
       ],
     },

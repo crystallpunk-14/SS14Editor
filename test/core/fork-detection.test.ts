@@ -228,7 +228,7 @@ describe('detectFork', () => {
     });
   });
 
-  it('gives every failure state a non-empty, panel-ready message', () => {
+  it('gives every failure state a non-empty, user-facing message', () => {
     const specs: FakeForkSpec[] = [
       healthySpec({ gitmodules: null }),
       (() => {

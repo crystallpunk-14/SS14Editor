@@ -4,7 +4,7 @@
  * The index is a flat set of raw records, one per prototype across every kind:
  * `(kind, id)` plus where it lives and what it inherits from. No AST is kept and
  * inheritance is not resolved here. This module owns the two pure halves the
- * host adapter (worker, watcher, cache, panel) is built on:
+ * host adapter (worker, watcher, cache, status log) is built on:
  *
  *   - {@link collectRecords}: one file's text -> its records;
  *   - {@link diffRecords}: two record sets -> added / removed / changed.
@@ -392,13 +392,13 @@ export function parseIndexCache(
 }
 
 // ---------------------------------------------------------------------------
-// Panel status
+// Status
 // ---------------------------------------------------------------------------
 
 /**
  * The index's progress or result, mirroring {@link import('./schema').SchemaStatus}:
- * one `state` discriminant and a `message` on every variant for the panel to
- * show verbatim.
+ * one `state` discriminant and a `message` on every variant to be logged
+ * verbatim.
  */
 export type IndexStatus =
   | { readonly state: 'building'; readonly message: string; readonly done: number; readonly total: number }
