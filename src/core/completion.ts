@@ -145,6 +145,7 @@ export function completionsAt(
   index?: PrototypeIndexView,
   resources?: ResourceTree,
 ): CompletionCandidate[] {
+  text = withFinalNewline(text);
   const resolved = resolveCursor(text, offset, schema);
   if (!resolved) return [];
   const { ctx, insertPrefix, keyNeedsColon } = resolved;
@@ -175,6 +176,16 @@ export function completionsAt(
     default:
       return [];
   }
+}
+
+/**
+ * `text` with its last line terminated. A value typed on the last line of a file
+ * with no newline after it ends exactly at the caret, and a node's range is
+ * open at its end, so the caret falls outside every node and has no context at
+ * all. Appending after the end moves no offset, so candidate ranges stay valid.
+ */
+function withFinalNewline(text: string): string {
+  return text.endsWith('\n') ? text : `${text}\n`;
 }
 
 /**

@@ -196,6 +196,15 @@ describe('completionsAt — ResPath dispatch is by `fieldKind` alone', () => {
     expect(tree.listed).toEqual([dir]);
   });
 
+  it('lists a picked directory at the very end of the file, with no newline after it', () => {
+    const text = inComponent('SoundOnGather', 'sound: !type:SoundPathSpecifier\n      path: /Maps/').trimEnd();
+
+    expect(completionsAt(text, text.length, SCHEMA, undefined, resources()).map((c) => c.label)).toEqual([
+      'Shuttles',
+      'box.yml',
+    ]);
+  });
+
   it('offers the root on an empty `path:` under `!type:SoundPathSpecifier`', () => {
     const text = inComponent('SoundOnGather', 'sound: !type:SoundPathSpecifier\n      path: ');
     const offset = after(text, 'path: ');

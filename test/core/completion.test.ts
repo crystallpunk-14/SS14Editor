@@ -158,6 +158,12 @@ describe.each([
     expect(candidates.every((c) => c.insertText === `${c.label}: `)).toBe(true);
   });
 
+  it('offers values for a value typed at the very end of the file, with no newline after it', () => {
+    const text = [...meleeBlock, '    swingLeft: tr'].join(eol);
+
+    expect(completionsAt(text, text.length, SCHEMA).map((c) => c.label)).toEqual(['false', 'true']);
+  });
+
   it('marks a field key that writes its colon as continuing onto the value slot', () => {
     const { text, offset } = atEndOf([...meleeBlock, '    swingL']);
 

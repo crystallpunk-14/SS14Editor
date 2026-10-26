@@ -349,6 +349,9 @@ function toCompletionItem(document: vscode.TextDocument, candidate: CompletionCa
     item.filterText = candidate.insertText ?? candidate.label;
   }
   if (candidate.filterText) item.filterText = candidate.filterText;
-  if (candidate.continues) item.command = { title: 'Suggest', command: SUGGEST_IF_ANY_COMMAND };
+  // A picked directory always reopens the list on its next segment, straight
+  // through VS Code; a field key only where its value slot has something to offer.
+  if (candidate.kind === 'folder') item.command = { title: 'Suggest', command: 'editor.action.triggerSuggest' };
+  else if (candidate.continues) item.command = { title: 'Suggest', command: SUGGEST_IF_ANY_COMMAND };
   return item;
 }
