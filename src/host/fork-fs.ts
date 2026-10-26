@@ -2,7 +2,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import type { CsSourceTree, ForkFs } from '../core';
+import type { CsSourceTree, ForkFs, ResourceTree } from '../core';
 
 /** Run `fn`, returning `fallback` if it throws (missing path, permission, not a repo). */
 function orElse<T>(fn: () => T, fallback: T): T {
@@ -54,6 +54,27 @@ export function createForkFs(rootPath: string): ForkFs {
         () => nulSeparated(execFileSync('git', ['-C', rootPath, 'ls-files', '-z', '--', relPath], GIT_OPTIONS)),
         undefined,
       ),
+  };
+}
+
+/**
+ * The fork's `Resources/` for `ResPath` completion (issue #32): one synchronous
+ * `readdir` per request, no cache (ADR-0001) — a file added on disk is listed by
+ * the next request. A symlink counts as a directory when it points at one.
+ */
+export function createResourceTree(rootPath: string): ResourceTree {
+  const resources = path.join(rootPath, 'Resources');
+  return {
+    listDir: (relPath) =>
+      orElse(() => {
+        const dir = path.join(resources, ...relPath.split('/'));
+        return fs.readdirSync(dir, { withFileTypes: true }).map((entry) => ({
+          name: entry.name,
+          isDirectory:
+            entry.isDirectory() ||
+            (entry.isSymbolicLink() && orElse(() => fs.statSync(path.join(dir, entry.name)).isDirectory(), false)),
+        }));
+      }, undefined),
   };
 }
 

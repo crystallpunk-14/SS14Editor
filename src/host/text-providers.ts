@@ -11,9 +11,10 @@ import {
   reopensSuggestAfterDeletion,
   type CompletionCandidate,
   type PrototypeIndexView,
+  type ResourceTree,
   type SchemaRoot,
 } from '../core';
-import { createCsSourceTree } from './fork-fs';
+import { createCsSourceTree, createResourceTree } from './fork-fs';
 import type { ForkStatusController } from './fork-status-controller';
 import type { SchemaController } from './schema-controller';
 
@@ -37,7 +38,9 @@ import type { SchemaController } from './schema-controller';
  * simply have no candidates and no target. The same provider jumps from a
  * component name or a `!type:` tag to its C# class (issue #31) through a {@link ClassLocator},
  * which caches what it reads until the next schema change. Hover (issue #30)
- * registers on the same selector and reads the schema alone.
+ * registers on the same selector and reads the schema alone. A `ResPath` value
+ * completes from the fork's `Resources/`, listed afresh on every request
+ * (issue #32, ADR-0001), so `/` is a trigger character too.
  */
 export class TextProviderController implements vscode.Disposable {
   private registration: vscode.Disposable | undefined;
@@ -80,19 +83,21 @@ export class TextProviderController implements vscode.Disposable {
     const getSchema = () => this.schema.schema;
     const forkPath = root.uri.fsPath;
     const getLocator = () => (this.classLocator ??= new ClassLocator(createCsSourceTree(forkPath)));
+    const resources = createResourceTree(forkPath);
     this.registration = vscode.Disposable.from(
       vscode.languages.registerCompletionItemProvider(
         selector,
-        new PrototypeCompletionProvider(getSchema, this.prototypeIndex),
+        new PrototypeCompletionProvider(getSchema, this.prototypeIndex, resources),
         ' ',
         ':',
+        '/',
       ),
       vscode.languages.registerDefinitionProvider(
         selector,
         new PrototypeDefinitionProvider(getSchema, this.prototypeIndex, getLocator, root.uri),
       ),
       vscode.languages.registerHoverProvider(selector, new PrototypeHoverProvider(getSchema)),
-      triggerSuggestOnEdit(selector, getSchema, this.prototypeIndex),
+      triggerSuggestOnEdit(selector, getSchema, this.prototypeIndex, resources),
     );
   }
 
@@ -117,6 +122,7 @@ function triggerSuggestOnEdit(
   selector: vscode.DocumentSelector,
   getSchema: () => SchemaRoot | null,
   index: PrototypeIndexView,
+  resources: ResourceTree,
 ): vscode.Disposable {
   return vscode.workspace.onDidChangeTextDocument((event) => {
     const editor = vscode.window.activeTextEditor;
@@ -131,7 +137,7 @@ function triggerSuggestOnEdit(
     if (changes.length === 1 && only.text === '' && only.rangeLength > 0) {
       // A deletion leaves the caret where the removed range started.
       const offset = event.document.offsetAt(only.range.start);
-      if (reopensSuggestAfterDeletion(event.document.getText(), offset, schema, index)) triggerSuggest();
+      if (reopensSuggestAfterDeletion(event.document.getText(), offset, schema, index, resources)) triggerSuggest();
       return;
     }
 
@@ -173,6 +179,7 @@ export class PrototypeCompletionProvider implements vscode.CompletionItemProvide
   constructor(
     private readonly getSchema: () => SchemaRoot | null,
     private readonly index: PrototypeIndexView,
+    private readonly resources: ResourceTree,
   ) {}
 
   provideCompletionItems(
@@ -185,7 +192,13 @@ export class PrototypeCompletionProvider implements vscode.CompletionItemProvide
     // `document.getText()` is already BOM-free (VS Code strips it from the
     // model) and `offsetAt` counts over that same text, so offsets line up with
     // what the core parses.
-    const candidates = completionsAt(document.getText(), document.offsetAt(position), schema, this.index);
+    const candidates = completionsAt(
+      document.getText(),
+      document.offsetAt(position),
+      schema,
+      this.index,
+      this.resources,
+    );
     return candidates.map((candidate) => toCompletionItem(document, candidate));
   }
 }
@@ -298,6 +311,8 @@ const KIND: Record<CompletionCandidate['kind'], vscode.CompletionItemKind> = {
   value: vscode.CompletionItemKind.EnumMember,
   id: vscode.CompletionItemKind.Reference,
   type: vscode.CompletionItemKind.TypeParameter,
+  file: vscode.CompletionItemKind.File,
+  folder: vscode.CompletionItemKind.Folder,
 };
 
 function toCompletionItem(document: vscode.TextDocument, candidate: CompletionCandidate): vscode.CompletionItem {
@@ -316,5 +331,8 @@ function toCompletionItem(document: vscode.TextDocument, candidate: CompletionCa
     item.range = new vscode.Range(document.positionAt(candidate.range[0]), document.positionAt(candidate.range[1]));
     item.filterText = candidate.insertText ?? candidate.label;
   }
+  if (candidate.filterText) item.filterText = candidate.filterText;
+  // A picked directory leaves the path open for its next segment.
+  if (candidate.kind === 'folder') item.command = { title: 'Suggest', command: 'editor.action.triggerSuggest' };
   return item;
 }

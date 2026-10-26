@@ -80,6 +80,7 @@ export type {
 
 export { completionsAt, opensSuggestOnNewLine, reopensSuggestAfterDeletion } from './completion';
 export type { CompletionCandidate } from './completion';
+export type { ResourceEntry, ResourceTree } from './resource-paths';
 export { classDefinitionAt, definitionAt } from './definition';
 export type { ClassDefinition, DefinitionTarget } from './definition';
 export { hoverAt, hoverMarkdown, readableTypeName } from './hover';

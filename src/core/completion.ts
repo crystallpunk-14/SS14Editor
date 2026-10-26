@@ -18,7 +18,8 @@
  *   5. field values      — on a value slot, for the field kinds whose whole
  *      domain the schema carries: `boolean`, and the enum-backed `enum`/`flags`
  *      — plus prototype ids (`protoId`/`entityProtoId`, and `parent:`), whose
- *      domain is the prototype index rather than the schema (issue #33);
+ *      domain is the prototype index rather than the schema (issue #33), and
+ *      `resPath` files, whose domain is `Resources/` on disk (issue #32);
  *   6. prototype types   — on the `type:` value slot of the prototype itself,
  *      one level out from (1);
  *   7. union members     — on a `!type:` tag, or where one can still go (a bare
@@ -83,6 +84,7 @@ import {
   type PrototypeFile,
 } from './prototype-yaml';
 import type { PrototypeIndexView } from './prototype-index';
+import { resourcePathCandidates, type ResourceTree } from './resource-paths';
 import type {
   DataDefinitionMetadata,
   FieldMetadata,
@@ -94,7 +96,7 @@ import type {
 export interface CompletionCandidate {
   /** The name shown in the list — a prototype/component name, a field key, an enum member. */
   readonly label: string;
-  readonly kind: 'prototype' | 'component' | 'field' | 'value' | 'id' | 'type';
+  readonly kind: 'prototype' | 'component' | 'field' | 'value' | 'id' | 'type' | 'file' | 'folder';
   /**
    * Short right-aligned signature: a declared type, a class name, an enum type,
    * or — for an id — its prototype kind, `(abstract)` when it is one. A union
@@ -114,20 +116,27 @@ export interface CompletionCandidate {
    * so the whole tag is swapped for {@link insertText}.
    */
   readonly range?: readonly [number, number];
+  /**
+   * What to match the typed text against when it is neither {@link insertText}
+   * nor {@link label} — a path entry whose insert also writes a `/`.
+   */
+  readonly filterText?: string;
 }
 
 /**
- * Candidates for the caret at `offset` in `text`, given the loaded `schema` and
- * the prototype `index`. Empty when the caret is not on one of the completion
- * points, the schema (or, for an id, the index) has nothing to offer there, or
- * the text cannot be parsed even after the bare-key recovery below. Ids need an
- * index that is ready; without one their slot stays empty.
+ * Candidates for the caret at `offset` in `text`, given the loaded `schema`, the
+ * prototype `index` and the fork's `resources`. Empty when the caret is not on
+ * one of the completion points, the schema (or, for an id, the index; for a
+ * path, the resource tree) has nothing to offer there, or the text cannot be
+ * parsed even after the bare-key recovery below. Ids need an index that is
+ * ready; without one their slot stays empty, as a path's does without a tree.
  */
 export function completionsAt(
   text: string,
   offset: number,
   schema: SchemaRoot,
   index?: PrototypeIndexView,
+  resources?: ResourceTree,
 ): CompletionCandidate[] {
   const resolved = resolveCursor(text, offset, schema);
   if (!resolved) return [];
@@ -152,6 +161,9 @@ export function completionsAt(
         const base = polymorphicBaseOf(slotAt(ctx, schema), schema, false);
         if (base) return memberCandidates(base, schema, { insertPrefix });
       }
+      if (onResPathSlot(ctx, schema)) {
+        return resources ? resourcePathCandidates(text, offset, resources, insertPrefix) : [];
+      }
       return valueCandidates(ctx, schema, index, insertPrefix);
     default:
       return [];
@@ -173,10 +185,11 @@ export function reopensSuggestAfterDeletion(
   offset: number,
   schema: SchemaRoot,
   index?: PrototypeIndexView,
+  resources?: ResourceTree,
 ): boolean {
   const before = text.slice(lineStartAt(text, offset), offset);
   if (!PARTIAL_WORD.test(before) && !EMPTIED_VALUE.test(before) && !EMPTIED_TAG.test(before)) return false;
-  return completionsAt(text, offset, schema, index).length > 0;
+  return completionsAt(text, offset, schema, index, resources).length > 0;
 }
 
 /**
@@ -614,7 +627,8 @@ function siblingKeys(ctx: CursorContext): Set<string> {
  * anything about its name. From the schema: the kinds whose whole domain it
  * carries — `boolean`, and the enum-backed `enum` / `flags`. From the index: the
  * ids a prototype reference ({@link protoRefKind}) may name. A `resPath` names a
- * file, which neither carries, so it stays empty.
+ * file, which neither carries — {@link onResPathSlot} sends it to the resource
+ * tree before it gets here.
  */
 function valueCandidates(
   ctx: CursorContext,
@@ -647,6 +661,26 @@ function slotCandidates(
 }
 
 const BOOLEAN_VALUES = ['false', 'true'] as const;
+
+/**
+ * Whether the caret's value is a path under `Resources/`: a slot declared
+ * `ResPath` (or a list of them), reached without passing through a
+ * `SpriteSpecifier`/`SoundSpecifier`. Those wrappers are one opaque kind
+ * (ADR-0001): a `!type:SoundPathSpecifier` tag does reach a `ResPath` `path:`
+ * inside, but the dispatch is by the declared type of the field, and the field
+ * is the specifier.
+ */
+function onResPathSlot(ctx: CursorContext, schema: SchemaRoot): boolean {
+  const slot = slotAt(ctx, schema);
+  if (!slot || itemOf(slot.node).kind !== RES_PATH_KIND) return false;
+  return !chainAt(ctx, schema)?.steps.some((step) => SPECIFIER_KINDS.has(itemOf(step).kind));
+}
+
+/** `FieldMetadata.fieldKind` the CLI emits for a `ResPath`-typed field. */
+const RES_PATH_KIND = 'resPath';
+
+/** The opaque wrappers over a `ResPath`, whose inner fields get no path completion. */
+const SPECIFIER_KINDS = new Set(['soundSpecifier', 'spriteSpecifier']);
 
 /**
  * The prototype kind a slot's value names, or `null` when it names none:
@@ -900,18 +934,25 @@ function containerFields(ref: FieldRef, schema: SchemaRoot): readonly FieldMetad
  * into — fields, and the entry keys of any dictionaries on the way.
  */
 function scopeAt(ref: FieldRef, schema: SchemaRoot): Scope | null {
+  return chainAt(ref, schema)?.scope ?? null;
+}
+
+/** {@link scopeAt}, along with the declared type of each key walked through on the way. */
+function chainAt(ref: FieldRef, schema: SchemaRoot): { scope: Scope; steps: readonly TypeNode[] } | null {
   const root = rootFieldsFor(ref, schema);
   if (!root) return null;
 
   let scope: Scope = { fields: root };
+  const steps: TypeNode[] = [];
   for (let step = 0; step < ref.fieldPath.length - 1; step++) {
     const slot = slotIn(scope, ref.fieldPath[step]);
     if (!slot) return null;
     const inner = scopeUnder(slot.node, ref.fieldTags[step] ?? null, schema);
     if (!inner) return null;
+    steps.push(slot.node);
     scope = inner;
   }
-  return scope;
+  return { scope, steps };
 }
 
 function slotIn(scope: Scope, key: string): Slot | null {
