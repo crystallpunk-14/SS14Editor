@@ -1,9 +1,7 @@
-import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { Worker } from 'node:worker_threads';
 
 import {
   CompletionItemKind,
@@ -26,29 +24,27 @@ import {
   classDefinitionAt,
   completionsAt,
   definitionAt,
-  detectFork,
-  EXPECTED_SCHEMA_VERSION,
   hoverAt,
   hoverMarkdown,
-  interpretSchemaResult,
-  parseSchemaDocument,
   PROTOTYPE_ROOTS,
-  PrototypeIndex,
-  schemaCacheDirName,
   type CompletionCandidate,
-  type SchemaRoot,
-  type SchemaRunOutcome,
+  type ResourceTree,
 } from '../core';
-import { createCsSourceTree, createForkFs, createResourceTree } from '../host/fork-fs';
-import type { FromWorker, ToWorker } from '../host/prototype-index-worker';
+import { createCsSourceTree, createResourceTree } from '../host/fork-fs';
+import { ForkState } from './fork-state';
+import { IndexService } from './index-service';
+import { Reporter } from './reporter';
+import { SchemaService } from './schema-service';
 
 /**
- * SPIKE (stage 0 of the Rider plan): the VS Code host's controllers folded into
- * one stdio language server, so any LSP client — Rider's platform LSP API first —
- * gets the same completion, hover and go-to-definition off the pure core.
+ * Stdio language server over the pure core — the LSP counterpart of the VS Code
+ * host (`src/host/`), so any LSP client (Rider first, ADR-0002) gets the same
+ * completion, hover and go-to-definition.
  *
- * Deliberately thin: no status diffing, no debounce of DLL rebuilds, one fork
- * (the first workspace folder). Stage 1 replaces it with proper controllers.
+ * One fork: the first workspace folder (or `rootUri`), which must itself be the
+ * fork root, as in VS Code. {@link ForkState}, {@link SchemaService} and
+ * {@link IndexService} mirror the host's controllers; this file wires them to
+ * the connection and maps core results to LSP types.
  */
 
 /** What the client may pass in `initializationOptions`; both default sensibly. */
@@ -61,165 +57,116 @@ interface InitOptions {
 
 const REBUILD_SCHEMA_COMMAND = 'ss14editor.rebuildSchema';
 const REBUILD_PROTOTYPE_INDEX_COMMAND = 'ss14editor.rebuildPrototypeIndex';
-const CLI_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** The built DLLs fork detection and the schema read — the VS Code host watches the same. */
+const DLL_GLOB = '**/bin/Content.{Server,Client}/*.dll';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
+const reporter = new Reporter(connection);
 
-const index = new PrototypeIndex();
-let forkRoot: string | undefined;
-let storagePath = path.join(os.tmpdir(), 'ss14editor');
-let schemaCliPath = path.join(__dirname, '..', 'assets', 'schema-cli', 'SS14Editor.SchemaCli.dll');
-let schema: SchemaRoot | null = null;
-let worker: Worker | undefined;
+let rootPath: string | undefined;
+let options: InitOptions = {};
+let fork: ForkState | undefined;
+let schema: SchemaService | undefined;
+let prototypes: IndexService | undefined;
+let resources: ResourceTree | undefined;
+/** Created on the first component jump; dropped on every schema change, when classes may have moved. */
 let classLocator: ClassLocator | undefined;
 
-const log = (line: string) => connection.console.log(line);
-
 connection.onInitialize((params: InitializeParams): InitializeResult => {
-  const options = (params.initializationOptions ?? {}) as InitOptions;
-  if (options.storagePath) storagePath = options.storagePath;
-  if (options.schemaCliPath) schemaCliPath = options.schemaCliPath;
-
+  options = (params.initializationOptions ?? {}) as InitOptions;
   const rootUri = params.workspaceFolders?.[0]?.uri ?? params.rootUri;
-  forkRoot = rootUri ? fileURLToPath(rootUri) : undefined;
+  rootPath = rootUri?.startsWith('file:') ? fileURLToPath(rootUri) : undefined;
 
   return {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
+      // `/` too: a ResPath value completes segment by segment (ADR-0001).
       completionProvider: { triggerCharacters: [' ', ':', '/'] },
       hoverProvider: true,
       definitionProvider: true,
       executeCommandProvider: { commands: [REBUILD_SCHEMA_COMMAND, REBUILD_PROTOTYPE_INDEX_COMMAND] },
     },
-    serverInfo: { name: 'SS14 Prototype Editor (spike)' },
+    serverInfo: { name: 'SS14 Prototype Editor' },
   };
 });
 
 connection.onInitialized(() => {
   void connection.client.register(DidChangeWatchedFilesNotification.type, {
-    watchers: [
-      { globPattern: '**/bin/Content.{Server,Client}/*.dll' },
-      ...PROTOTYPE_ROOTS.map((root) => ({ globPattern: `**/${root.dir}/**` })),
-    ],
+    watchers: [{ globPattern: DLL_GLOB }, ...PROTOTYPE_ROOTS.map((root) => ({ globPattern: `**/${root.dir}/**` }))],
   });
-  void start(false);
+
+  const storagePath = options.storagePath ?? path.join(os.tmpdir(), 'ss14editor');
+  const cliPath =
+    options.schemaCliPath ?? path.join(__dirname, '..', 'assets', 'schema-cli', 'SS14Editor.SchemaCli.dll');
+
+  fork = new ForkState(rootPath, reporter);
+  schema = new SchemaService(fork, storagePath, cliPath, reporter);
+  prototypes = new IndexService(fork, storagePath, reporter);
+  schema.onDidChange(() => {
+    classLocator = undefined;
+  });
+  fork.onDidChange(() => {
+    resources = undefined;
+    classLocator = undefined;
+  });
+
+  // First extraction straight through, not via the DLL debounce: on an
+  // unchanged fork the CLI no-ops and features are up in well under a second.
+  void schema.run();
 });
 
-/** Detect the fork, extract the schema, then build the index — the VS Code activation order. */
-async function start(forceIndex: boolean): Promise<void> {
-  if (!forkRoot) {
-    log('[fork] No workspace folder: nothing to do.');
-    return;
-  }
-  const status = detectFork(createForkFs(forkRoot));
-  if (!status.recognized) {
-    log(`[fork] ${status.message}`);
-    return;
-  }
-  log(`[fork] ${forkRoot} recognized as an SS14 fork.`);
-  await loadSchema();
-  startIndex(forceIndex);
-}
-
-async function loadSchema(): Promise<void> {
-  if (!forkRoot) return;
-  const cacheDir = path.join(storagePath, 'schema', schemaCacheDirName(path.basename(forkRoot), forkRoot));
-  fs.mkdirSync(cacheDir, { recursive: true });
-
-  const started = Date.now();
-  const run: SchemaRunOutcome = fs.existsSync(schemaCliPath)
-    ? await invokeCli(schemaCliPath, forkRoot, cacheDir)
-    : { kind: 'extractor-missing' };
-
-  const document = readIfPresent(path.join(cacheDir, 'metadata.json'));
-  const parse = document === undefined ? undefined : parseSchemaDocument(document);
-  const sidecar = readIfPresent(path.join(cacheDir, 'metadata.fingerprint'));
-  const status = interpretSchemaResult({
-    run,
-    parse,
-    sidecarFingerprint: sidecar?.trim() || undefined,
-    expectedVersion: EXPECTED_SCHEMA_VERSION,
-  });
-
-  schema = status.state === 'loaded' && parse?.ok ? parse.root : null;
-  classLocator = undefined;
-  log(`[schema] ${status.state} in ${Date.now() - started} ms${'message' in status ? `: ${status.message}` : ''}`);
-}
-
-function startIndex(force: boolean): void {
-  if (!forkRoot) return;
-  void worker?.terminate();
-  index.reset();
-
-  const cachePath = path.join(
-    storagePath,
-    'prototype-index',
-    `${schemaCacheDirName(path.basename(forkRoot), forkRoot)}.json`,
-  );
-  const started = new Worker(path.join(__dirname, 'prototype-index-worker.js'));
-  worker = started;
-  started.on('message', (message: FromWorker) => {
-    if (worker !== started) return;
-    switch (message.type) {
-      case 'loaded':
-        index.replaceAll(message.records);
-        log(`[index] ${message.records.length} prototypes ${message.fromCache ? 'read from cache' : 'parsed'} in ${message.elapsedMs} ms`);
-        break;
-      case 'updated':
-        if (!index.ready) break;
-        for (const file of message.files) index.updateFile(file.filePath, file.records);
-        break;
-      case 'log':
-        log(`[index] ${message.message}`);
-        break;
-      case 'failed':
-        log(`[index] failed: ${message.reason}`);
-        break;
-    }
-  });
-  started.on('error', (err) => log(`[index] worker crashed: ${err.stack ?? err.message}`));
-  send({ type: 'build', forkRoot, cachePath, schemaVersion: EXPECTED_SCHEMA_VERSION, force });
-}
-
-function send(message: ToWorker): void {
-  worker?.postMessage(message);
-}
+connection.onShutdown(() => {
+  prototypes?.dispose();
+  schema?.dispose();
+  fork?.dispose();
+});
 
 connection.onDidChangeWatchedFiles(({ changes }) => {
-  const paths = changes.map((change) => fileURLToPath(change.uri));
-  if (paths.some((p) => p.endsWith('.dll'))) void loadSchema();
-  const prototypes = paths.filter((p) => !p.endsWith('.dll'));
-  if (prototypes.length > 0) send({ type: 'update', paths: prototypes });
+  const paths = changes.filter((change) => change.uri.startsWith('file:')).map((change) => fileURLToPath(change.uri));
+  if (paths.some((p) => p.toLowerCase().endsWith('.dll'))) {
+    fork?.scheduleRefresh();
+    schema?.scheduleRun();
+  }
+  const prototypePaths = paths.filter((p) => !p.toLowerCase().endsWith('.dll'));
+  if (prototypePaths.length > 0) prototypes?.queueUpdate(prototypePaths);
 });
 
 connection.onExecuteCommand(async ({ command }) => {
-  if (command === REBUILD_SCHEMA_COMMAND) await loadSchema();
-  else if (command === REBUILD_PROTOTYPE_INDEX_COMMAND) startIndex(true);
+  if (command === REBUILD_SCHEMA_COMMAND) await schema?.run();
+  else if (command === REBUILD_PROTOTYPE_INDEX_COMMAND) prototypes?.rebuild();
 });
 
-/** A prototype YAML of the open fork — what the VS Code selector matches. */
-function isPrototypeDocument(uri: string): boolean {
-  return /\/Resources\/Prototypes\/.+\.ya?ml$/i.test(decodeURIComponent(uri).replace(/\\/g, '/'));
+/**
+ * What every feature needs, or `undefined` when the request is not for a
+ * prototype file of the recognised fork, or the schema is not loaded — the
+ * VS Code selector plus the provider registration's preconditions.
+ */
+function contextFor(uri: string) {
+  const document = documents.get(uri);
+  const root = fork?.recognizedRoot();
+  const loaded = schema?.schema;
+  if (!document || !root || !loaded || !prototypes || !uri.startsWith('file:')) return undefined;
+  const relative = path.relative(root.path, fileURLToPath(uri)).split(path.sep).join('/');
+  if (!/^Resources\/Prototypes\/.+\.ya?ml$/i.test(relative)) return undefined;
+  return { document, root, schema: loaded, index: prototypes.index };
 }
 
 connection.onCompletion(({ textDocument, position }) => {
-  const document = documents.get(textDocument.uri);
-  if (!document || !schema || !forkRoot || !isPrototypeDocument(textDocument.uri)) return [];
-  const candidates = completionsAt(
-    document.getText(),
-    document.offsetAt(position),
-    schema,
-    index,
-    createResourceTree(forkRoot),
-  );
+  const context = contextFor(textDocument.uri);
+  if (!context) return [];
+  const { document, root } = context;
+  resources ??= createResourceTree(root.path);
+  const candidates = completionsAt(document.getText(), document.offsetAt(position), context.schema, context.index, resources);
   return candidates.map((candidate) => toCompletionItem(document, candidate));
 });
 
 connection.onHover(({ textDocument, position }) => {
-  const document = documents.get(textDocument.uri);
-  if (!document || !schema || !isPrototypeDocument(textDocument.uri)) return null;
-  const hover = hoverAt(document.getText(), document.offsetAt(position), schema);
+  const context = contextFor(textDocument.uri);
+  if (!context) return null;
+  const { document } = context;
+  const hover = hoverAt(document.getText(), document.offsetAt(position), context.schema);
   if (!hover) return null;
   return {
     contents: { kind: MarkupKind.Markdown, value: hoverMarkdown(hover) },
@@ -227,45 +174,58 @@ connection.onHover(({ textDocument, position }) => {
   };
 });
 
+/**
+ * A prototype id jumps to its declaration (engine prototypes resolve the same
+ * way, into `RobustToolbox/Resources/EnginePrototypes/`); a component name or a
+ * `!type:` tag to its C# class — one link per part of a partial class.
+ */
 connection.onDefinition(async ({ textDocument, position }): Promise<LocationLink[] | null> => {
-  const document = documents.get(textDocument.uri);
-  if (!document || !schema || !forkRoot || !isPrototypeDocument(textDocument.uri)) return null;
+  const context = contextFor(textDocument.uri);
+  if (!context) return null;
+  const { document, root } = context;
   const text = document.getText();
   const offset = document.offsetAt(position);
 
-  const found = definitionAt(text, offset, schema, index);
+  const found = definitionAt(text, offset, context.schema, context.index);
   if (found) {
     const [start, , end] = found.target.range;
-    const link = linkTo(document, found.origin, found.target.filePath, [start, end], [start, start]);
+    const link = linkTo(root.path, document, found.origin, found.target.filePath, [start, end], [start, start]);
     return link ? [link] : null;
   }
 
-  const named = classDefinitionAt(text, offset, schema);
+  const named = classDefinitionAt(text, offset, context.schema);
   if (!named) return null;
-  const root = forkRoot;
-  classLocator ??= new ClassLocator(createCsSourceTree(root));
+  classLocator ??= new ClassLocator(createCsSourceTree(root.path));
   const locations = await classLocator.locate(named.className);
   const links = locations
     .map((location) => {
       const name: [number, number] = [location.offset, location.offset + location.name.length];
-      return linkTo(document, named.origin, location.filePath, name, name);
+      return linkTo(root.path, document, named.origin, location.filePath, name, name);
     })
     .filter((link) => link !== undefined);
   return links.length > 0 ? links : null;
 });
 
-/** A link to `[start, end)` offsets of a fork-relative file, read from disk with its BOM stripped. */
+/**
+ * A link from `origin` in `document` to `[start, end)` offsets of a
+ * fork-relative file — `undefined` when that file can no longer be read. Core
+ * offsets are into the BOM-stripped text, so the file is read the same way.
+ */
 function linkTo(
+  forkRoot: string,
   document: TextDocument,
   origin: readonly [number, number],
   filePath: string,
   target: readonly [number, number],
   selection: readonly [number, number],
 ): LocationLink | undefined {
-  if (!forkRoot) return undefined;
   const absolute = path.join(forkRoot, ...filePath.split('/'));
-  const raw = readIfPresent(absolute);
-  if (raw === undefined) return undefined;
+  let raw: string;
+  try {
+    raw = fs.readFileSync(absolute, 'utf8');
+  } catch {
+    return undefined;
+  }
   const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
   const file = TextDocument.create(pathToFileURL(absolute).toString(), 'plaintext', 0, text);
   return {
@@ -291,47 +251,26 @@ const KIND: Record<CompletionCandidate['kind'], CompletionItemKind> = {
   folder: CompletionItemKind.Folder,
 };
 
-/** Mirrors the VS Code adapter's `toCompletionItem`; `range` becomes an explicit `textEdit`. */
-function toCompletionItem(
-  document: TextDocument,
-  candidate: CompletionCandidate,
-): CompletionItem {
+/** Mirrors the VS Code adapter's `toCompletionItem`; a core `range` becomes an explicit `textEdit`. */
+function toCompletionItem(document: TextDocument, candidate: CompletionCandidate): CompletionItem {
   const item: CompletionItem = { label: candidate.label, kind: KIND[candidate.kind] };
   if (candidate.detail) item.detail = candidate.detail;
+  // Set only where the core synthesized syntax the caret needs (`type:`, a
+  // colon, a `!type:` tag); `filterText` keeps the bare name matching.
   if (candidate.insertText) {
     item.insertText = candidate.insertText;
     item.filterText = candidate.label;
   }
+  // A written `!type:` tag is replaced whole, so match against the full tag.
   if (candidate.range) {
     item.textEdit = { range: rangeIn(document, candidate.range), newText: candidate.insertText ?? candidate.label };
     item.filterText = candidate.insertText ?? candidate.label;
   }
   if (candidate.filterText) item.filterText = candidate.filterText;
-  // Spike: the reopen-after-accept behaviour has no LSP equivalent yet; the
-  // client sees the hint and decides (stage 3).
+  // Picking it leaves the caret on the next completion point; LSP has no way to
+  // reopen the list, so the hint is the client's to act on.
   if (candidate.kind === 'folder' || candidate.continues) item.data = { continues: true };
   return item;
-}
-
-function invokeCli(dll: string, root: string, cacheDir: string): Promise<SchemaRunOutcome> {
-  return new Promise((resolve) => {
-    execFile('dotnet', [dll, root, cacheDir], { timeout: CLI_TIMEOUT_MS, windowsHide: true }, (error, _stdout, stderr) => {
-      if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
-        resolve({ kind: 'dotnet-missing' });
-        return;
-      }
-      const code = typeof error?.code === 'number' ? error.code : error ? 1 : 0;
-      resolve({ kind: 'exited', code, stderr: stderr ?? '' });
-    });
-  });
-}
-
-function readIfPresent(file: string): string | undefined {
-  try {
-    return fs.readFileSync(file, 'utf8');
-  } catch {
-    return undefined;
-  }
 }
 
 documents.listen(connection);

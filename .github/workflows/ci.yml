@@ -41,8 +41,11 @@ jobs:
       - name: Core tests
         run: npm run test:core
 
-      - name: Bundle (host + worker)
+      - name: Bundle (host + worker + language server)
         run: npm run build
+
+      - name: Language server tests
+        run: npx vitest run --config vitest.server.config.ts
 
       - name: Activation smoke test
         run: xvfb-run -a npm run test:smoke
