@@ -19,7 +19,10 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          # 8 for the extractor itself, 10 for its xUnit suite.
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       - run: npm ci
 
@@ -31,6 +34,9 @@ jobs:
 
       - name: Verify the extractor is staged for packaging
         run: test -f assets/schema-cli/SS14Editor.SchemaCli.dll
+
+      - name: Schema extractor tests
+        run: dotnet test schema-cli/tests/SS14Editor.SchemaCli.Tests.csproj
 
       - name: Typecheck
         run: npm run typecheck
@@ -63,4 +69,54 @@ jobs:
         with:
           name: ss14editor-vsix
           path: '*.vsix'
+          if-no-files-found: error
+
+  # --- Rider plugin (ADR-0002) -----------------------------------------------
+  # Gradle builds the language server and the extractor itself (buildServer,
+  # buildSchemaCli), compiles against the Rider SDK of `riderVersion` — there is
+  # no local Rider here — runs the headless smoke tests and the Plugin Verifier.
+  rider-plugin:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: rider-plugin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: npm ci
+        working-directory: .
+
+      - name: Build plugin, run tests, verify compatibility
+        run: ./gradlew buildPlugin test verifyPlugin
+
+      - name: Verify the plugin carries the server and the extractor
+        run: |
+          zip=$(ls build/distributions/*.zip)
+          unzip -l "$zip" | grep -q 'server/dist/server.js'
+          unzip -l "$zip" | grep -q 'server/dist/prototype-index-worker.js'
+          unzip -l "$zip" | grep -q 'server/assets/schema-cli/SS14Editor.SchemaCli.dll'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ss14editor-rider
+          path: rider-plugin/build/distributions/*.zip
           if-no-files-found: error

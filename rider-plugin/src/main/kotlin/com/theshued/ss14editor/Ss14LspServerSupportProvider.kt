@@ -20,8 +20,11 @@ private const val PLUGIN_ID = "com.theshued.ss14editor"
 private val LOG = logger<Ss14LspServerSupportProvider>()
 
 /** A YAML file under `Resources/Prototypes/` — what the VS Code selector matches. */
-internal fun isPrototypeFile(file: VirtualFile): Boolean =
-    file.extension.let { it == "yml" || it == "yaml" } && file.path.contains("/Resources/Prototypes/")
+internal fun isPrototypeFile(file: VirtualFile): Boolean = isPrototypePath(file.path)
+
+/** [isPrototypeFile] on a `/`-separated path, as `VirtualFile.path` spells it. */
+internal fun isPrototypePath(path: String): Boolean =
+    (path.endsWith(".yml") || path.endsWith(".yaml")) && path.contains("/Resources/Prototypes/")
 
 /**
  * Starts the language server the first time a prototype file is opened. The

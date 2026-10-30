@@ -1,4 +1,6 @@
 import org.apache.tools.ant.taskdefs.condition.Os
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
+import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -23,7 +25,11 @@ dependencies {
         val local = providers.gradleProperty("riderPath").orNull?.takeIf { file(it).isDirectory }
         if (local != null) local(local) else rider(providers.gradleProperty("riderVersion"))
         bundledPlugins("org.jetbrains.plugins.yaml", "JavaScript")
+        testFramework(TestFrameworkType.Platform)
     }
+    testImplementation("junit:junit:4.13.2")
+    // The platform test framework expects it on the classpath and does not bring it.
+    testImplementation("org.opentest4j:opentest4j:1.3.0")
 }
 
 kotlin {
@@ -45,6 +51,27 @@ intellijPlatform {
         version = project.version.toString()
         ideaVersion {
             sinceBuild = "253"
+        }
+    }
+    // `./gradlew publishPlugin` (docs/publishing-rider.md): the Marketplace token and,
+    // optionally, the signing certificate come from the environment only — never
+    // from a file in the repo. Without a certificate `signPlugin` is skipped and
+    // the IDE warns about an unsigned plugin on install.
+    publishing {
+        token = providers.environmentVariable("PUBLISH_TOKEN")
+    }
+    signing {
+        certificateChain = providers.environmentVariable("CERTIFICATE_CHAIN")
+        privateKey = providers.environmentVariable("PRIVATE_KEY")
+        password = providers.environmentVariable("PRIVATE_KEY_PASSWORD")
+    }
+    // `./gradlew verifyPlugin`: the Plugin Verifier against the Rider it was built
+    // for — the same check JetBrains Marketplace runs on upload.
+    pluginVerification {
+        ides {
+            val local = providers.gradleProperty("riderPath").orNull?.takeIf { file(it).isDirectory }
+            if (local != null) local(local)
+            else create(IntelliJPlatformType.Rider, providers.gradleProperty("riderVersion"))
         }
     }
 }
