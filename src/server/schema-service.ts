@@ -112,7 +112,7 @@ export class SchemaService {
     // usually no-op in tens of milliseconds.
     const first = this.status == null;
     if (first) this.reporter.log(['[schema] Extracting schema from the fork build…']);
-    const progress = first ? await this.reporter.progress('SS14: extracting schema') : undefined;
+    const progress = first ? await this.reporter.progress(this.reporter.messages.extractingSchema) : undefined;
 
     try {
       const cacheDir = path.join(this.storagePath, 'schema', schemaCacheDirName(root.name, root.path));
@@ -143,7 +143,10 @@ export class SchemaService {
     this.reporter.log(schemaStatusLog(this.status, status));
     this.status = status;
     if (status === null) this.schemaRoot = null;
-    this.reporter.problem('schema', status && status.state !== 'loaded' ? status.message : null);
+    this.reporter.problem(
+      'schema',
+      status && status.state !== 'loaded' ? this.reporter.messages.schemaProblem(status) : null,
+    );
     for (const listener of this.listeners) listener();
   }
 

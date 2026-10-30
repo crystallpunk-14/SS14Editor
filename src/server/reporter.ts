@@ -5,6 +5,8 @@ import {
   type WorkDoneProgressServerReporter,
 } from 'vscode-languageserver/node';
 
+import { messagesFor, type Locale, type Messages } from './i18n';
+
 /** What part of the pipeline a problem belongs to — each keeps its own latest problem. */
 export type ProblemArea = 'fork' | 'schema' | 'index';
 
@@ -23,8 +25,18 @@ export type ProblemArea = 'fork' | 'schema' | 'index';
  */
 export class Reporter {
   private readonly problems = new Map<ProblemArea, string>();
+  private current: Messages = messagesFor('en');
 
   constructor(private readonly connection: Connection) {}
+
+  /** The language problems, diagnostics and progress are shown in — set once, from `initialize`. */
+  setLocale(locale: Locale): void {
+    this.current = messagesFor(locale);
+  }
+
+  get messages(): Messages {
+    return this.current;
+  }
 
   log(lines: readonly string[]): void {
     for (const line of lines) this.connection.console.log(line);

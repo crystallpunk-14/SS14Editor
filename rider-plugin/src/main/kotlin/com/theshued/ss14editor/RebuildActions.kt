@@ -21,11 +21,14 @@ internal fun isSs14Fork(project: Project): Boolean = project.guessProjectDir()?.
  * no server running yet (it starts with the first prototype file opened), it
  * says so instead.
  */
-abstract class Ss14CommandAction(private val command: String) : AnAction() {
+abstract class Ss14CommandAction(private val command: String, private val textKey: String) : AnAction() {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 
     override fun update(e: AnActionEvent) {
         e.presentation.isEnabledAndVisible = e.project?.let(::isSs14Fork) == true
+        // In the plugin's language rather than plugin.xml's fixed English.
+        e.presentation.text = Ss14Bundle.message("$textKey.text")
+        e.presentation.description = Ss14Bundle.message("$textKey.description")
     }
 
     override fun actionPerformed(e: AnActionEvent) {
@@ -36,8 +39,8 @@ abstract class Ss14CommandAction(private val command: String) : AnAction() {
         if (running.isEmpty()) {
             NotificationGroupManager.getInstance().getNotificationGroup("SS14 Editor")
                 .createNotification(
-                    "SS14 Prototype Editor is not running yet",
-                    "Open any file under Resources/Prototypes/ to start it, then run this again.",
+                    Ss14Bundle.message("notification.notRunning.title"),
+                    Ss14Bundle.message("notification.notRunning.content"),
                     NotificationType.INFORMATION,
                 )
                 .notify(project)
@@ -49,6 +52,6 @@ abstract class Ss14CommandAction(private val command: String) : AnAction() {
     }
 }
 
-class RebuildSchemaAction : Ss14CommandAction("ss14editor.rebuildSchema")
+class RebuildSchemaAction : Ss14CommandAction("ss14editor.rebuildSchema", "action.rebuildSchema")
 
-class RebuildPrototypeIndexAction : Ss14CommandAction("ss14editor.rebuildPrototypeIndex")
+class RebuildPrototypeIndexAction : Ss14CommandAction("ss14editor.rebuildPrototypeIndex", "action.rebuildPrototypeIndex")

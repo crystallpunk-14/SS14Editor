@@ -183,16 +183,17 @@ export class IndexService {
   private setStatus(status: IndexStatus | null): void {
     this.reporter.log(indexStatusLog(this.status, status));
     this.status = status;
-    this.reporter.problem('index', status?.state === 'failed' ? status.message : null);
+    this.reporter.problem('index', status?.state === 'failed' ? this.reporter.messages.indexFailed(status.message) : null);
     this.showProgress(status);
   }
 
   /** One `$/progress` per build: begun on `building`, advanced per tick, done on anything else. */
   private showProgress(status: IndexStatus | null): void {
     if (status?.state === 'building') {
-      this.progress ??= this.reporter.progress('SS14: indexing prototypes');
+      this.progress ??= this.reporter.progress(this.reporter.messages.indexingPrototypes);
       const { done, total } = status;
-      if (total > 0) void this.progress.then((p) => p.report(Math.round((done / total) * 100), `${done}/${total} files`));
+      const text = this.reporter.messages.indexProgress(done, total);
+      if (total > 0) void this.progress.then((p) => p.report(Math.round((done / total) * 100), text));
       return;
     }
     const finished = this.progress;

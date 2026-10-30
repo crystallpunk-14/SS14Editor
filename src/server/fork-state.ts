@@ -66,9 +66,10 @@ export class ForkState {
     this.current = next;
 
     const status = next?.status;
-    if (!status) this.reporter.problem('fork', 'no folder is open — open an SS14 fork.', 'warning');
-    else if (!status.recognized) this.reporter.problem('fork', status.message, 'warning');
-    else if (status.stale) this.reporter.problem('fork', status.stale.message, 'warning');
+    const messages = this.reporter.messages;
+    if (!status) this.reporter.problem('fork', messages.noFolder, 'warning');
+    else if (!status.recognized) this.reporter.problem('fork', messages.forkProblem(status), 'warning');
+    else if (status.stale) this.reporter.problem('fork', messages.staleBuild(status.stale), 'warning');
     else this.reporter.problem('fork', null);
   }
 

@@ -100,7 +100,7 @@ afterEach(() => {
 });
 
 /** A started server on a fresh folder that has a prototype directory but is no SS14 fork. */
-async function startOnPlainFolder() {
+async function startOnPlainFolder(locale?: string) {
   folder = fs.mkdtempSync(path.join(os.tmpdir(), 'ss14editor-server-'));
   fs.mkdirSync(path.join(folder, 'Resources', 'Prototypes'), { recursive: true });
   const rootUri = pathToFileURL(folder).toString();
@@ -110,7 +110,7 @@ async function startOnPlainFolder() {
     rootUri,
     workspaceFolders: [{ uri: rootUri, name: path.basename(folder) }],
     capabilities: { window: { workDoneProgress: true } },
-    initializationOptions: { storagePath: path.join(folder, '.storage') },
+    initializationOptions: { storagePath: path.join(folder, '.storage'), ...(locale ? { locale } : {}) },
   });
   client.notify('initialized', {});
   return { client, folder, initialized };
@@ -137,6 +137,16 @@ describe('language server', () => {
 
     const shown = await client.waitFor('window/showMessage');
     expect(shown.params).toMatchObject({ type: 2, message: expect.stringContaining('Not an SS14 fork') });
+  });
+
+  it('speaks Russian to the user when the client asks for `ru`, and keeps the log in English', async () => {
+    const { client } = await startOnPlainFolder('ru');
+    const shown = await client.waitFor('window/showMessage');
+    expect((shown.params as { message: string }).message).toBe(
+      'SS14 Prototype Editor: Это не форк SS14: в .gitmodules не объявлен сабмодуль RobustToolbox.',
+    );
+    const log = await client.waitFor('window/logMessage');
+    expect((log.params as { message: string }).message).toMatch(/Not an SS14 fork/);
   });
 
   it('completes nothing in a prototype file when there is no fork', async () => {

@@ -31,7 +31,14 @@ export interface PrototypeDiagnostic {
   /** `[start, end)` of the offending scalar in the BOM-stripped text. */
   readonly range: readonly [number, number];
   readonly code: DiagnosticCode;
+  /** English text; a host that shows another language builds its own from the fields below. */
   readonly message: string;
+  /** The value as written: the component name, the id, the enum value. */
+  readonly value: string;
+  /** `unknown-prototype`: the prototype kind the id was looked up under. */
+  readonly kind?: string;
+  /** `invalid-enum-value`: the names the type accepts. */
+  readonly choices?: readonly string[];
 }
 
 export function diagnosticsFor(
@@ -53,7 +60,7 @@ export function diagnosticsFor(
 
     if (ctx.token.kind === 'component-type') {
       if (!Object.hasOwn(schema.components, value)) {
-        diagnostics.push({ range, code: 'unknown-component', message: `Unknown component "${value}".` });
+        diagnostics.push({ range, code: 'unknown-component', value, message: `Unknown component "${value}".` });
       }
       continue;
     }
@@ -63,7 +70,13 @@ export function diagnosticsFor(
       if (index && knownKinds?.has(kind)) {
         const lookup = index.get(kind, value);
         if (lookup.ready && !lookup.record) {
-          diagnostics.push({ range, code: 'unknown-prototype', message: `No ${kind} prototype with id "${value}".` });
+          diagnostics.push({
+            range,
+            code: 'unknown-prototype',
+            value,
+            kind,
+            message: `No ${kind} prototype with id "${value}".`,
+          });
         }
       }
       continue;
@@ -74,6 +87,8 @@ export function diagnosticsFor(
       diagnostics.push({
         range,
         code: 'invalid-enum-value',
+        value,
+        choices,
         message: `"${value}" is not one of: ${choices.join(', ')}.`,
       });
     }
@@ -97,3 +112,4 @@ function isEnumValue(value: string, choices: readonly string[]): boolean {
   const names = new Set(choices.map((choice) => choice.toLowerCase()));
   return value.split(',').every((part) => names.has(part.trim().toLowerCase()));
 }
+

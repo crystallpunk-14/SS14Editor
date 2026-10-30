@@ -2,6 +2,7 @@ import { DiagnosticSeverity, type Connection, type Diagnostic } from 'vscode-lan
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 
 import { diagnosticsFor, type PrototypeDiagnostic, type PrototypeIndexView, type SchemaRoot } from '../core';
+import type { Messages } from './i18n';
 
 /** Typing lands in bursts; check a document once it settles. */
 const CHECK_DEBOUNCE_MS = 300;
@@ -34,6 +35,7 @@ export class DiagnosticsService {
     private readonly connection: Connection,
     private readonly documentOf: (uri: string) => TextDocument | undefined,
     private readonly contextFor: (uri: string) => CheckContext | undefined,
+    private readonly messages: () => Messages,
   ) {}
 
   schedule(uri: string): void {
@@ -74,7 +76,7 @@ export class DiagnosticsService {
     const found = diagnosticsFor(document.getText(), context.schema, context.index);
     this.publish(
       uri,
-      found.map((problem) => toDiagnostic(document, problem, context.stale)),
+      found.map((problem) => toDiagnostic(document, problem, context.stale, this.messages())),
     );
   }
 
@@ -87,9 +89,12 @@ export class DiagnosticsService {
   }
 }
 
-const STALE_HINT = ' The fork build is older than its C# sources — rebuild it to refresh the schema.';
-
-function toDiagnostic(document: TextDocument, problem: PrototypeDiagnostic, stale: boolean): Diagnostic {
+function toDiagnostic(
+  document: TextDocument,
+  problem: PrototypeDiagnostic,
+  stale: boolean,
+  messages: Messages,
+): Diagnostic {
   const fromSchema = problem.code !== 'unknown-prototype';
   const softened = fromSchema && stale;
   return {
@@ -97,6 +102,6 @@ function toDiagnostic(document: TextDocument, problem: PrototypeDiagnostic, stal
     severity: softened ? DiagnosticSeverity.Warning : DiagnosticSeverity.Error,
     code: problem.code,
     source: 'SS14',
-    message: softened ? problem.message + STALE_HINT : problem.message,
+    message: messages.diagnostic(problem) + (softened ? messages.staleDiagnosticHint : ''),
   };
 }

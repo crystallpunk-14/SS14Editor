@@ -36,6 +36,7 @@ import {
 import { createCsSourceTree, createResourceTree } from '../host/fork-fs';
 import { DiagnosticsService } from './diagnostics-service';
 import { ForkState } from './fork-state';
+import { localeOf } from './i18n';
 import { IndexService } from './index-service';
 import { Reporter } from './reporter';
 import { SchemaService } from './schema-service';
@@ -57,6 +58,8 @@ interface InitOptions {
   readonly storagePath?: string;
   /** `SS14Editor.SchemaCli.dll`; defaults to `../assets/schema-cli/` next to `dist/`. */
   readonly schemaCliPath?: string;
+  /** `en` (default) or `ru`: the language of problems, diagnostics and progress. */
+  readonly locale?: string;
 }
 
 /**
@@ -101,11 +104,13 @@ const diagnostics = new DiagnosticsService(
     const context = contextFor(uri);
     return context ? { schema: context.schema, index: context.index, stale: fork?.isStale() ?? false } : undefined;
   },
+  () => reporter.messages,
 );
 const recheckOpenDocuments = () => diagnostics.recheckAll(documents.keys());
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   options = (params.initializationOptions ?? {}) as InitOptions;
+  reporter.setLocale(localeOf(options.locale));
   const rootUri = params.workspaceFolders?.[0]?.uri ?? params.rootUri;
   rootPath = rootUri?.startsWith('file:') ? fileURLToPath(rootUri) : undefined;
 

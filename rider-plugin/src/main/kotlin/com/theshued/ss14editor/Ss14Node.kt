@@ -59,13 +59,16 @@ class Ss14NodeService(private val project: Project) : Disposable {
         if (!reported.compareAndSet(false, true)) return
         NotificationGroupManager.getInstance().getNotificationGroup("SS14 Editor")
             .createNotification(
-                "SS14 Prototype Editor needs Node.js",
-                "Autocomplete, hover and go-to-definition in prototypes run on Node.js $MIN_NODE_MAJOR or newer, " +
-                    "and none was found. Rider can download it for you.",
+                Ss14Bundle.message("notification.nodeMissing.title"),
+                Ss14Bundle.message("notification.nodeMissing.content", MIN_NODE_MAJOR),
                 NotificationType.WARNING,
             )
-            .addAction(NotificationAction.createSimpleExpiring("Download Node.js…") { downloadNode() })
-            .addAction(NotificationAction.createSimple("Node.js settings") {
+            .addAction(
+                NotificationAction.createSimpleExpiring(Ss14Bundle.message("notification.nodeMissing.download")) {
+                    downloadNode()
+                },
+            )
+            .addAction(NotificationAction.createSimple(Ss14Bundle.message("notification.nodeMissing.settings")) {
                 ShowSettingsUtil.getInstance().showSettingsDialog(project, "Node.js")
             })
             .notify(project)

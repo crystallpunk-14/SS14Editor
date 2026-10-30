@@ -78,5 +78,7 @@ class Ss14LspServerDescriptor(project: Project, root: VirtualFile, private val n
     override fun createInitializationOptions(): Any = mapOf(
         "storagePath" to PathManager.getSystemDir().resolve("ss14editor").toString(),
         "schemaCliPath" to serverDir.resolve("assets/schema-cli/SS14Editor.SchemaCli.dll").toString(),
+        // Problems, diagnostics and progress in the plugin's language; a change restarts the server.
+        "locale" to if (Ss14Settings.getInstance().effectiveLanguage == Ss14Language.RU) "ru" else "en",
     )
 }

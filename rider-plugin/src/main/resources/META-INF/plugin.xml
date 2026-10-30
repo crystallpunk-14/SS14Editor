@@ -43,6 +43,10 @@
         <backspaceHandlerDelegate implementation="com.theshued.ss14editor.Ss14BackspaceHandler"/>
         <enterHandlerDelegate implementation="com.theshued.ss14editor.Ss14EnterHandler"/>
         <notificationGroup id="SS14 Editor" displayType="BALLOON"/>
+        <applicationConfigurable parentId="tools"
+                                 id="com.theshued.ss14editor.settings"
+                                 instance="com.theshued.ss14editor.Ss14Configurable"
+                                 displayName="SS14 Prototype Editor"/>
         <postStartupActivity implementation="com.theshued.ss14editor.Ss14PrototypeContentRoots"/>
     </extensions>
 
