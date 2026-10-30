@@ -18,7 +18,7 @@ repositories {
 dependencies {
     intellijPlatform {
         local(providers.gradleProperty("riderPath"))
-        bundledPlugin("org.jetbrains.plugins.yaml")
+        bundledPlugins("org.jetbrains.plugins.yaml", "JavaScript")
     }
 }
 

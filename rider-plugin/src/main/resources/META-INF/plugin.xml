@@ -11,10 +11,13 @@
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.lsp</depends>
     <depends>org.jetbrains.plugins.yaml</depends>
+    <!-- Node for the language server: the project's interpreter, detection and Rider's own download (ADR-0002). -->
+    <depends>JavaScript</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <platform.lsp.serverSupportProvider
                 implementation="com.theshued.ss14editor.Ss14LspServerSupportProvider"/>
+        <notificationGroup id="SS14 Editor" displayType="BALLOON"/>
         <postStartupActivity implementation="com.theshued.ss14editor.Ss14PrototypeContentRoots"/>
     </extensions>
 

@@ -8,19 +8,15 @@ import com.intellij.platform.backend.workspace.workspaceModel
 import com.intellij.platform.lsp.api.LspServerManager
 import com.intellij.platform.workspace.jps.entities.ContentRootEntity
 import com.intellij.platform.workspace.jps.entities.ModuleEntity
-import com.intellij.platform.workspace.storage.EntitySource
-import com.intellij.platform.workspace.storage.MutableEntityStorage
+import com.intellij.workspaceModel.ide.NonPersistentEntitySource
 
 private val LOG = logger<Ss14PrototypeContentRoots>()
 
 /** The prototype roots the index reads (`PROTOTYPE_ROOTS` in the TS core). */
 private val PROTOTYPE_DIRS = listOf("Resources/Prototypes", "RobustToolbox/Resources/EnginePrototypes")
 
-/**
- * Marks our entities. Not a JPS source, so nothing serializes them: they live
- * only in memory and the fork's `.idea` is never written.
- */
-private object Ss14EntitySource : EntitySource
+/** Name of the in-memory module holding the prototype folders. */
+private const val MODULE_NAME = "SS14 Prototypes"
 
 /**
  * In Rider, project content is what the `.csproj` files include, and `Resources/`
@@ -38,13 +34,19 @@ class Ss14PrototypeContentRoots : ProjectActivity {
 
         val workspaceModel = project.workspaceModel
         val urls = workspaceModel.getVirtualFileUrlManager()
-        val replacement = MutableEntityStorage.create().apply {
-            addEntity(ModuleEntity("SS14 Prototypes", emptyList(), Ss14EntitySource) {
-                contentRoots = dirs.map { ContentRootEntity(urls.getOrCreateFromUrl(it.url), emptyList(), Ss14EntitySource) }
-            })
-        }
+        // `NonPersistentEntitySource` is neither saved to `.idea` nor to the
+        // workspace-model cache (a custom source would need generated metadata
+        // for the cache). It is shared, so ours is found by name, not by source.
         workspaceModel.update("SS14: prototype folders as content") { storage ->
-            storage.replaceBySource({ it == Ss14EntitySource }, replacement)
+            storage.entities(ModuleEntity::class.java)
+                .filter { it.name == MODULE_NAME && it.entitySource == NonPersistentEntitySource }
+                .toList()
+                .forEach { storage.removeEntity(it) }
+            storage.addEntity(ModuleEntity(MODULE_NAME, emptyList(), NonPersistentEntitySource) {
+                contentRoots = dirs.map {
+                    ContentRootEntity(urls.getOrCreateFromUrl(it.url), emptyList(), NonPersistentEntitySource)
+                }
+            })
         }
         LOG.info("SS14: added content roots ${dirs.joinToString { it.path }}")
 

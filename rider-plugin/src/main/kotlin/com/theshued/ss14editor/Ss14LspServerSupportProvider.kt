@@ -1,7 +1,6 @@
 package com.theshued.ss14editor
 
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.execution.configurations.PathEnvironmentVariableUtil
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.logger
@@ -33,9 +32,14 @@ class Ss14LspServerSupportProvider : LspServerSupportProvider {
         serverStarter: LspServerSupportProvider.LspServerStarter,
     ) {
         if (!isPrototypeFile(file)) return
-        val root = project.guessProjectDir()
-        LOG.info("SS14: prototype file opened (${file.path}), fork root ${root?.path}")
-        if (root != null) serverStarter.ensureServerStarted(Ss14LspServerDescriptor(project, root))
+        val root = project.guessProjectDir() ?: return
+        val node = findNode(project)
+        LOG.info("SS14: prototype file opened (${file.path}), fork root ${root.path}, node $node")
+        if (node == null) {
+            Ss14NodeService.getInstance(project).reportMissing()
+            return
+        }
+        serverStarter.ensureServerStarted(Ss14LspServerDescriptor(project, root, node))
     }
 }
 
@@ -44,7 +48,7 @@ class Ss14LspServerSupportProvider : LspServerSupportProvider {
  * `BaseProjectDirectories`, which in Rider are the `.csproj` folders: `Resources/`
  * belongs to none of them, so prototype files would never reach the server.
  */
-class Ss14LspServerDescriptor(project: Project, root: VirtualFile) :
+class Ss14LspServerDescriptor(project: Project, root: VirtualFile, private val node: String) :
     LspServerDescriptor(project, "SS14 Prototype Editor", root) {
     private val serverDir: Path =
         PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID))!!.pluginPath.resolve("server")
@@ -52,11 +56,8 @@ class Ss14LspServerDescriptor(project: Project, root: VirtualFile) :
     override fun isSupportedFile(file: VirtualFile): Boolean = isPrototypeFile(file)
 
     override fun createCommandLine(): GeneralCommandLine {
-        // Spike: Node from PATH. Which Node to ship or reuse is stage 0's open question (ADR-0002).
-        val node = PathEnvironmentVariableUtil.findExecutableInPathOnAnyOS("node")
-            ?: throw IllegalStateException("SS14 Prototype Editor needs Node.js on PATH (spike build).")
-        LOG.info("SS14: starting the language server with ${node.absolutePath}, roots ${roots.joinToString { it.path }}")
-        return GeneralCommandLine(node.absolutePath, serverDir.resolve("dist/server.js").toString(), "--stdio")
+        LOG.info("SS14: starting the language server with $node, roots ${roots.joinToString { it.path }}")
+        return GeneralCommandLine(node, serverDir.resolve("dist/server.js").toString(), "--stdio")
             .withWorkDirectory(serverDir.toFile())
     }
 
