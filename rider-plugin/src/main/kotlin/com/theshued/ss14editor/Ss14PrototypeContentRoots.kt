@@ -8,6 +8,7 @@ import com.intellij.platform.backend.workspace.workspaceModel
 import com.intellij.platform.lsp.api.LspServerManager
 import com.intellij.platform.workspace.jps.entities.ContentRootEntity
 import com.intellij.platform.workspace.jps.entities.ModuleEntity
+import com.intellij.platform.workspace.storage.MutableEntityStorage
 import com.intellij.workspaceModel.ide.NonPersistentEntitySource
 
 private val LOG = logger<Ss14PrototypeContentRoots>()
@@ -28,7 +29,7 @@ private const val MODULE_NAME = "SS14 Prototypes"
 class Ss14PrototypeContentRoots : ProjectActivity {
     override suspend fun execute(project: Project) {
         val root = project.guessProjectDir() ?: return
-        if (root.findChild("RobustToolbox") == null) return
+        if (!isSs14Fork(project)) return
         val dirs = PROTOTYPE_DIRS.mapNotNull { root.findFileByRelativePath(it) }
         if (dirs.isEmpty()) return
 
@@ -38,10 +39,7 @@ class Ss14PrototypeContentRoots : ProjectActivity {
         // workspace-model cache (a custom source would need generated metadata
         // for the cache). It is shared, so ours is found by name, not by source.
         workspaceModel.update("SS14: prototype folders as content") { storage ->
-            storage.entities(ModuleEntity::class.java)
-                .filter { it.name == MODULE_NAME && it.entitySource == NonPersistentEntitySource }
-                .toList()
-                .forEach { storage.removeEntity(it) }
+            removePrototypeModule(storage)
             storage.addEntity(ModuleEntity(MODULE_NAME, emptyList(), NonPersistentEntitySource) {
                 contentRoots = dirs.map {
                     ContentRootEntity(urls.getOrCreateFromUrl(it.url), emptyList(), NonPersistentEntitySource)
@@ -53,4 +51,12 @@ class Ss14PrototypeContentRoots : ProjectActivity {
         // Files restored on startup were opened before they were content.
         LspServerManager.getInstance(project).startServersIfNeeded(Ss14LspServerSupportProvider::class.java)
     }
+}
+
+/** Drops our module, if present, from `storage`. */
+private fun removePrototypeModule(storage: MutableEntityStorage) {
+    storage.entities(ModuleEntity::class.java)
+        .filter { it.name == MODULE_NAME && it.entitySource == NonPersistentEntitySource }
+        .toList()
+        .forEach { storage.removeEntity(it) }
 }

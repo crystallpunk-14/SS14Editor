@@ -1,12 +1,35 @@
-<idea-plugin>
+<!--
+    require-restart: Rider's action search (RiderActionSearchEverywhereContributor) keeps
+    every action it has listed for the project's lifetime, ours included, so after any
+    Find Action the plugin's class loader can never be released (ADR-0002).
+-->
+<idea-plugin require-restart="true">
     <id>com.theshued.ss14editor</id>
     <name>SS14 Prototype Editor</name>
     <vendor>TheShuEd</vendor>
     <description><![CDATA[
-        Autocomplete, hover docs and go-to-definition for Space Station 14 YAML
-        prototypes, built from any SS14 fork's code. Spike build: the same
-        language server as the VS Code extension, over Rider's LSP API.
+        <p>Autocomplete, hover docs and go-to-definition for
+        <a href="https://spacestation14.com/">Space Station 14</a> YAML prototypes,
+        built from any SS14 fork's code.</p>
+        <ul>
+            <li><b>Component names</b> after <code>- type:</code>, including the ones only your fork has.</li>
+            <li><b>Fields</b> of components, nested data definitions and prototypes; fields already written are not offered again.</li>
+            <li><b>Values</b>: booleans, enum and flag values, prototype types, the classes allowed after a <code>!type:</code> tag.</li>
+            <li><b>Prototype ids</b> in <code>parent:</code> and in any field that references a prototype, filtered to the right kind.</li>
+            <li><b>Resource paths</b> under <code>Resources/</code> in fields that take one.</li>
+            <li><b>Hover</b> over a component, a field or a <code>!type:</code> tag for its C# docs, type and default.</li>
+            <li><b>Go to definition</b> from a prototype id to its declaration, from a component or tag to its C# class.</li>
+        </ul>
+        <p><b>Getting started.</b> Build your fork once (<code>dotnet build</code>), open its solution in Rider and open
+        any file under <code>Resources/Prototypes/</code>. The plugin needs the .NET SDK and Node.js 18+; if Node.js is
+        missing, it offers to download it. It never writes into the fork folder.</p>
+        <p>The same engine as the <a href="https://github.com/crystallpunk-14/SS14Editor">SS14 Prototype Editor for VS Code</a>.
+        Icon: Space Station 14 logo by AftrLite, CC-BY-SA-4.0.</p>
     ]]></description>
+
+    <change-notes><![CDATA[
+        <p>0.1.0 — first Rider build: completion, hover and go-to-definition in prototype files.</p>
+    ]]></change-notes>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.lsp</depends>
@@ -26,10 +49,12 @@
             <add-to-group group-id="ToolsMenu" anchor="last"/>
             <action id="Ss14Editor.RebuildSchema"
                     class="com.theshued.ss14editor.RebuildSchemaAction"
-                    text="SS14: Rebuild Schema"/>
+                    text="SS14: Rebuild Schema"
+                    description="Re-read components and fields from the built fork"/>
             <action id="Ss14Editor.RebuildPrototypeIndex"
                     class="com.theshued.ss14editor.RebuildPrototypeIndexAction"
-                    text="SS14: Rebuild Prototype Index"/>
+                    text="SS14: Rebuild Prototype Index"
+                    description="Re-read all prototype files, ignoring the cache"/>
         </group>
     </actions>
 </idea-plugin>
