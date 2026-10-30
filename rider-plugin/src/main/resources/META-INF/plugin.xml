@@ -1,0 +1,32 @@
+<idea-plugin>
+    <id>com.theshued.ss14editor</id>
+    <name>SS14 Prototype Editor</name>
+    <vendor>TheShuEd</vendor>
+    <description><![CDATA[
+        Autocomplete, hover docs and go-to-definition for Space Station 14 YAML
+        prototypes, built from any SS14 fork's code. Spike build: the same
+        language server as the VS Code extension, over Rider's LSP API.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lsp</depends>
+    <depends>org.jetbrains.plugins.yaml</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <platform.lsp.serverSupportProvider
+                implementation="com.theshued.ss14editor.Ss14LspServerSupportProvider"/>
+        <postStartupActivity implementation="com.theshued.ss14editor.Ss14PrototypeContentRoots"/>
+    </extensions>
+
+    <actions>
+        <group id="Ss14Editor.Actions" text="SS14" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="Ss14Editor.RebuildSchema"
+                    class="com.theshued.ss14editor.RebuildSchemaAction"
+                    text="SS14: Rebuild Schema"/>
+            <action id="Ss14Editor.RebuildPrototypeIndex"
+                    class="com.theshued.ss14editor.RebuildPrototypeIndexAction"
+                    text="SS14: Rebuild Prototype Index"/>
+        </group>
+    </actions>
+</idea-plugin>
