@@ -40,6 +40,8 @@
     <extensions defaultExtensionNs="com.intellij">
         <platform.lsp.serverSupportProvider
                 implementation="com.theshued.ss14editor.Ss14LspServerSupportProvider"/>
+        <backspaceHandlerDelegate implementation="com.theshued.ss14editor.Ss14BackspaceHandler"/>
+        <enterHandlerDelegate implementation="com.theshued.ss14editor.Ss14EnterHandler"/>
         <notificationGroup id="SS14 Editor" displayType="BALLOON"/>
         <postStartupActivity implementation="com.theshued.ss14editor.Ss14PrototypeContentRoots"/>
     </extensions>

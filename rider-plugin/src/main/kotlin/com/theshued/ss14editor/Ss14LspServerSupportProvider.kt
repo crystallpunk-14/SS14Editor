@@ -10,6 +10,9 @@ import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.LspServerDescriptor
+import com.intellij.platform.lsp.api.customization.LspCompletionCustomizer
+import com.intellij.platform.lsp.api.customization.LspCustomization
+import org.eclipse.lsp4j.services.LanguageServer
 import java.nio.file.Path
 
 private const val PLUGIN_ID = "com.theshued.ss14editor"
@@ -54,6 +57,14 @@ class Ss14LspServerDescriptor(project: Project, root: VirtualFile, private val n
         PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID))!!.pluginPath.resolve("server")
 
     override fun isSupportedFile(file: VirtualFile): Boolean = isPrototypeFile(file)
+
+    /** `ss14/shouldSuggest` on top of LSP (stage 3). */
+    override val lsp4jServerClass: Class<out LanguageServer> = Ss14LanguageServer::class.java
+
+    /** Completion that reopens the list after a candidate that continues. */
+    override val lspCustomization: LspCustomization = object : LspCustomization() {
+        override val completionCustomizer: LspCompletionCustomizer = Ss14CompletionSupport()
+    }
 
     override fun createCommandLine(): GeneralCommandLine {
         LOG.info("SS14: starting the language server with $node, roots ${roots.joinToString { it.path }}")

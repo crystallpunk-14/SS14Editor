@@ -9,6 +9,7 @@ import {
   DidChangeWatchedFilesNotification,
   MarkupKind,
   ProposedFeatures,
+  RequestType,
   TextDocuments,
   TextDocumentSyncKind,
   type CompletionItem,
@@ -26,7 +27,9 @@ import {
   definitionAt,
   hoverAt,
   hoverMarkdown,
+  opensSuggestOnNewLine,
   PROTOTYPE_ROOTS,
+  reopensSuggestAfterDeletion,
   type CompletionCandidate,
   type ResourceTree,
 } from '../core';
@@ -54,6 +57,22 @@ interface InitOptions {
   /** `SS14Editor.SchemaCli.dll`; defaults to `../assets/schema-cli/` next to `dist/`. */
   readonly schemaCliPath?: string;
 }
+
+/**
+ * Whether the client should open the completion list at `offset` after an edit
+ * the editor itself never opens it on — LSP has no way to say so. `accepted`: a
+ * candidate that continues (`data.continues`) was just inserted; `deletion`:
+ * Backspace; `newline`: Enter. `text` and `offset` are the document as the
+ * client has it now, so the answer never waits on `didChange` reaching us.
+ */
+interface ShouldSuggestParams {
+  readonly uri: string;
+  readonly text: string;
+  readonly offset: number;
+  readonly reason: 'accepted' | 'deletion' | 'newline';
+}
+
+const ShouldSuggestRequest = new RequestType<ShouldSuggestParams, boolean, void>('ss14/shouldSuggest');
 
 const REBUILD_SCHEMA_COMMAND = 'ss14editor.rebuildSchema';
 const REBUILD_PROTOTYPE_INDEX_COMMAND = 'ss14editor.rebuildPrototypeIndex';
@@ -152,6 +171,21 @@ function contextFor(uri: string) {
   if (!/^Resources\/Prototypes\/.+\.ya?ml$/i.test(relative)) return undefined;
   return { document, root, schema: loaded, index: prototypes.index };
 }
+
+/** The VS Code host's `triggerSuggestOnEdit` and `ss14editor.suggestIfAny`, as one request. */
+connection.onRequest(ShouldSuggestRequest, ({ uri, text, offset, reason }) => {
+  const context = contextFor(uri);
+  if (!context) return false;
+  resources ??= createResourceTree(context.root.path);
+  switch (reason) {
+    case 'accepted':
+      return completionsAt(text, offset, context.schema, context.index, resources).length > 0;
+    case 'deletion':
+      return reopensSuggestAfterDeletion(text, offset, context.schema, context.index, resources);
+    case 'newline':
+      return opensSuggestOnNewLine(text, offset, context.schema, context.index);
+  }
+});
 
 connection.onCompletion(({ textDocument, position }) => {
   const context = contextFor(textDocument.uri);
@@ -268,7 +302,7 @@ function toCompletionItem(document: TextDocument, candidate: CompletionCandidate
   }
   if (candidate.filterText) item.filterText = candidate.filterText;
   // Picking it leaves the caret on the next completion point; LSP has no way to
-  // reopen the list, so the hint is the client's to act on.
+  // reopen the list, so the client asks `ss14/shouldSuggest` after inserting it.
   if (candidate.kind === 'folder' || candidate.continues) item.data = { continues: true };
   return item;
 }

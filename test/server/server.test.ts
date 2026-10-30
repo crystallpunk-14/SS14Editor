@@ -152,6 +152,17 @@ describe('language server', () => {
     expect(completion.result).toEqual([]);
   });
 
+  it('never asks the client to open the list when there is no fork', async () => {
+    const { client, folder } = await startOnPlainFolder();
+    const uri = pathToFileURL(path.join(folder, 'Resources', 'Prototypes', 'a.yml')).toString();
+    const text = ['- type: entity', '  components:', '  - type: ', ''].join('\n');
+    client.notify('textDocument/didOpen', { textDocument: { uri, languageId: 'yaml', version: 1, text } });
+    for (const reason of ['accepted', 'deletion', 'newline']) {
+      const answer = await client.request('ss14/shouldSuggest', { uri, text, offset: text.length - 1, reason });
+      expect(answer.result).toBe(false);
+    }
+  });
+
   it('runs the rebuild commands without a fork, logging why the index is skipped', async () => {
     const { client } = await startOnPlainFolder();
     await client.request('workspace/executeCommand', { command: 'ss14editor.rebuildSchema', arguments: [] });
