@@ -767,6 +767,22 @@ function idCandidates(
 }
 
 /**
+ * The member names an enum- or flags-typed value accepts — the same domain value
+ * completion lists — for the value under `ctx`. `null` off a value, for any
+ * other kind of slot, and when the schema carries no names for that enum, so a
+ * caller never mistakes "unknown" for "empty".
+ */
+export function enumChoicesAt(ctx: CursorContext, schema: SchemaRoot): readonly string[] | null {
+  if (ctx.token.kind !== 'value') return null;
+  const slot = slotAt(ctx, schema);
+  if (!slot) return null;
+  const kind = itemOf(slot.node).kind;
+  if (kind !== 'enum' && kind !== 'flags') return null;
+  const { values } = valueChoicesOf(slot, schema);
+  return values.length > 0 ? values : null;
+}
+
+/**
  * The listable domain of a slot, read through its list `element` when the slot
  * is a sequence of such values. `detail` names the type the values come from.
  */

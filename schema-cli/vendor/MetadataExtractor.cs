@@ -217,9 +217,8 @@ public static class MetadataExtractor
     {
         static void ProcessNode(FieldTypeNode n, Dictionary<string, string[]> enums)
         {
-            if (n.EnumValues != null && n.FullType != null)
+            if (n.EnumValues != null && n.FullType != null && Share(enums, n.FullType, n.EnumValues))
             {
-                enums.TryAdd(n.FullType, n.EnumValues);
                 n.EnumRef = n.FullType;
                 n.EnumValues = null;
             }
@@ -232,9 +231,8 @@ public static class MetadataExtractor
 
         static void ProcessField(FieldMetadata f, Dictionary<string, string[]> enums)
         {
-            if (f.EnumValues != null && f.FullType != null)
+            if (f.EnumValues != null && f.FullType != null && Share(enums, f.FullType, f.EnumValues))
             {
-                enums.TryAdd(f.FullType, f.EnumValues);
                 f.EnumRef = f.FullType;
                 f.EnumValues = null;
             }
@@ -243,6 +241,15 @@ public static class MetadataExtractor
             if (f.Value   != null) ProcessNode(f.Value,   enums);
             if (f.TupleElements != null)
                 foreach (var t in f.TupleElements) ProcessNode(t, enums);
+        }
+
+        // Files `values` under `key` unless that key already holds a different
+        // list — then the field keeps its values inline rather than pointing at
+        // someone else's.
+        static bool Share(Dictionary<string, string[]> enums, string key, string[] values)
+        {
+            if (enums.TryAdd(key, values)) return true;
+            return enums[key].SequenceEqual(values);
         }
 
         var enums = root.Enums;
@@ -615,6 +622,22 @@ public static class MetadataExtractor
 
     private static string InferComponentName(Type type)
     {
+        // [ComponentProtoName("ContainerContainer")] overrides the class name,
+        // exactly as the engine's component factory registers it — inherited:
+        // a subclass without its own takes its nearest ancestor's.
+        for (var t = type; t != null; t = t.BaseType)
+        {
+            var protoName = t.CustomAttributes
+                .FirstOrDefault(a => a.AttributeType.Name == "ComponentProtoNameAttribute");
+            if (protoName != null &&
+                protoName.ConstructorArguments.Count > 0 &&
+                protoName.ConstructorArguments[0].Value is string explicitName &&
+                !string.IsNullOrWhiteSpace(explicitName))
+            {
+                return explicitName;
+            }
+        }
+
         var name = type.Name;
         if (name.EndsWith("Component"))
             name = name[..^"Component".Length];

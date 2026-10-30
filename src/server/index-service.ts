@@ -44,6 +44,7 @@ export class IndexService {
   /** `undefined` until the first status is reported, so that first one is always logged. */
   private status: IndexStatus | null | undefined = undefined;
   private progress: Promise<WorkDoneProgressServerReporter> | undefined;
+  private readonly listeners: Array<() => void> = [];
 
   constructor(
     private readonly fork: ForkState,
@@ -52,6 +53,11 @@ export class IndexService {
   ) {
     fork.onDidChange(() => this.onForkChanged());
     this.onForkChanged();
+  }
+
+  /** Fires after the index changes: a (re)load, a reset, or an incremental update that changed records. */
+  onDidUpdate(listener: () => void): void {
+    this.listeners.push(listener);
   }
 
   /** `ss14editor.rebuildPrototypeIndex`: a cold parse that ignores the cache. */
@@ -124,6 +130,7 @@ export class IndexService {
     if (wasActive) {
       this.index.reset();
       this.setStatus(null);
+      this.fireUpdate();
     }
   }
 
@@ -143,17 +150,21 @@ export class IndexService {
             (message.skippedFiles > 0 ? `, ${message.skippedFiles} files skipped` : ''),
         ]);
         this.setStatus(indexReady(this.index.size, message.skippedFiles));
+        this.fireUpdate();
         break;
       case 'updated': {
         if (!this.index.ready) break;
+        let changed = false;
         for (const file of message.files) {
           const diff = this.index.updateFile(file.filePath, file.records);
           if (diff.added.length + diff.removed.length + diff.changed.length === 0) continue;
+          changed = true;
           this.reporter.log([
             `[index] ${file.filePath}: +${diff.added.length} -${diff.removed.length} ~${diff.changed.length}`,
           ]);
         }
         this.setStatus(indexReady(this.index.size, message.skippedFiles));
+        if (changed) this.fireUpdate();
         break;
       }
       case 'log':
@@ -163,6 +174,10 @@ export class IndexService {
         this.setStatus(indexFailed(message.reason));
         break;
     }
+  }
+
+  private fireUpdate(): void {
+    for (const listener of this.listeners) listener();
   }
 
   private setStatus(status: IndexStatus | null): void {

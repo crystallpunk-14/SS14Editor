@@ -34,6 +34,7 @@ import {
   type ResourceTree,
 } from '../core';
 import { createCsSourceTree, createResourceTree } from '../host/fork-fs';
+import { DiagnosticsService } from './diagnostics-service';
 import { ForkState } from './fork-state';
 import { IndexService } from './index-service';
 import { Reporter } from './reporter';
@@ -93,6 +94,16 @@ let resources: ResourceTree | undefined;
 /** Created on the first component jump; dropped on every schema change, when classes may have moved. */
 let classLocator: ClassLocator | undefined;
 
+const diagnostics = new DiagnosticsService(
+  connection,
+  (uri) => documents.get(uri),
+  (uri) => {
+    const context = contextFor(uri);
+    return context ? { schema: context.schema, index: context.index, stale: fork?.isStale() ?? false } : undefined;
+  },
+);
+const recheckOpenDocuments = () => diagnostics.recheckAll(documents.keys());
+
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   options = (params.initializationOptions ?? {}) as InitOptions;
   const rootUri = params.workspaceFolders?.[0]?.uri ?? params.rootUri;
@@ -125,18 +136,26 @@ connection.onInitialized(() => {
   prototypes = new IndexService(fork, storagePath, reporter);
   schema.onDidChange(() => {
     classLocator = undefined;
+    recheckOpenDocuments();
   });
   fork.onDidChange(() => {
     resources = undefined;
     classLocator = undefined;
+    recheckOpenDocuments();
   });
+  prototypes.onDidUpdate(recheckOpenDocuments);
 
   // First extraction straight through, not via the DLL debounce: on an
   // unchanged fork the CLI no-ops and features are up in well under a second.
   void schema.run();
 });
 
+documents.onDidOpen(({ document }) => diagnostics.schedule(document.uri));
+documents.onDidChangeContent(({ document }) => diagnostics.schedule(document.uri));
+documents.onDidClose(({ document }) => diagnostics.close(document.uri));
+
 connection.onShutdown(() => {
+  diagnostics.dispose();
   prototypes?.dispose();
   schema?.dispose();
   fork?.dispose();

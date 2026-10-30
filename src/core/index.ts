@@ -69,6 +69,8 @@ export type {
 } from './prototype-index';
 
 export { completionsAt, opensSuggestOnNewLine, reopensSuggestAfterDeletion } from './completion';
+export { diagnosticsFor } from './diagnostics';
+export type { DiagnosticCode, PrototypeDiagnostic } from './diagnostics';
 export type { CompletionCandidate } from './completion';
 export type { ResourceEntry, ResourceTree } from './resource-paths';
 export { classDefinitionAt, definitionAt } from './definition';
@@ -81,6 +83,7 @@ export type { ClassDeclaration, ClassLocation, CsSourceTree } from './class-loca
 export {
   parsePrototypeFile,
   positionAt,
+  scalarSites,
   resolveField,
   cursorContextAt,
   replaceScalarValue,
@@ -93,6 +96,7 @@ export type {
   ParseResult,
   PrototypeFile,
   PrototypeParseError,
+  ScalarSite,
   NodeRange,
   TextPosition,
   FieldAddress,

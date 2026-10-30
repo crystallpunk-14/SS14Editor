@@ -38,6 +38,11 @@ export class ForkState {
       : undefined;
   }
 
+  /** True while the recognised fork's C# sources are newer than its built DLLs. */
+  isStale(): boolean {
+    return !!(this.current?.status.recognized && this.current.status.stale);
+  }
+
   onDidChange(listener: () => void): void {
     this.listeners.push(listener);
   }
