@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { diagnosticsFor, type PrototypeDiagnostic } from '../../src/core/diagnostics';
+import { componentNameRanges, diagnosticsFor, type PrototypeDiagnostic } from '../../src/core/diagnostics';
 import { collectRecords, PrototypeIndex, type PrototypeRecord } from '../../src/core/prototype-index';
 import { schemaSnapshot } from './prototype-fixtures';
 
@@ -125,3 +125,24 @@ describe('diagnosticsFor — what it leaves alone', () => {
     expect(check(['- type: madeUpKind', '  id: X', '  parent: Nope'])).toEqual([]);
   });
 });
+
+describe('componentNameRanges', () => {
+  it('spans every component name of a registry, known or not, and nothing else', () => {
+    const text = [
+      '- type: entity',
+      '  id: X',
+      '  parent: BaseItem',
+      '  components:',
+      '  - type: Item',
+      '    size: Small',
+      '  - type: Itme',
+      '',
+    ].join('\n');
+    expect(componentNameRanges(text, SCHEMA).map(([start, end]) => text.slice(start, end))).toEqual(['Item', 'Itme']);
+  });
+
+  it('is empty for a file that does not parse', () => {
+    expect(componentNameRanges(['- type: entity', '  id: [X', ''].join('\n'), SCHEMA)).toEqual([]);
+  });
+});
+

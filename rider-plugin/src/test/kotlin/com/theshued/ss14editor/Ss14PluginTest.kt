@@ -2,11 +2,15 @@ package com.theshued.ss14editor
 
 import com.intellij.codeInsight.editorActions.BackspaceHandlerDelegate
 import com.intellij.codeInsight.editorActions.enter.EnterHandlerDelegate
+import com.intellij.codeInsight.navigation.actions.GotoDeclarationHandler
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.editor.DefaultLanguageHighlighterColors
 import com.intellij.openapi.extensions.PluginId
+import com.intellij.openapi.options.colors.ColorSettingsPage
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.testFramework.ApplicationRule
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -41,6 +45,18 @@ class Ss14PluginTest {
     fun editorHandlersAreRegistered() {
         assertTrue(BackspaceHandlerDelegate.EP_NAME.extensionList.any { it is Ss14BackspaceHandler })
         assertTrue(EnterHandlerDelegate.EP_NAME.extensionList.any { it is Ss14EnterHandler })
+    }
+
+    @Test
+    fun ctrlHoverLinksComeFromOurGotoDeclarationHandler() {
+        assertTrue(GotoDeclarationHandler.EP_NAME.extensionList.any { it is Ss14GotoDeclarationHandler })
+    }
+
+    @Test
+    fun componentNameColourIsConfigurableAndDefaultsToAClassName() {
+        val page = ColorSettingsPage.EP_NAME.extensionList.single { it is Ss14ColorSettingsPage }
+        assertTrue(page.attributeDescriptors.any { it.key == SS14_COMPONENT_NAME })
+        assertEquals(DefaultLanguageHighlighterColors.CLASS_NAME, SS14_COMPONENT_NAME.fallbackAttributeKey)
     }
 
     @Test

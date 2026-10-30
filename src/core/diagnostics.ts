@@ -113,3 +113,18 @@ function isEnumValue(value: string, choices: readonly string[]): boolean {
   return value.split(',').every((part) => names.has(part.trim().toLowerCase()));
 }
 
+/**
+ * `[start, end)` of every component name written as a component registry's
+ * `type:` — known to the schema or not — for a host to colour (semantic tokens
+ * in the server). Same walk and same test as the `unknown-component` rule.
+ */
+export function componentNameRanges(text: string, schema: SchemaRoot): Array<readonly [number, number]> {
+  const file = parsePrototypeFile(text);
+  if (!file.ok) return [];
+  const ranges: Array<readonly [number, number]> = [];
+  for (const site of scalarSites(file)) {
+    if (site.isKey || site.value.trim() === '') continue;
+    if (contextAt(file, site.range[0], schema).token.kind === 'component-type') ranges.push(site.range);
+  }
+  return ranges;
+}

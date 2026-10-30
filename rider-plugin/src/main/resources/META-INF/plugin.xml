@@ -43,6 +43,8 @@
         <backspaceHandlerDelegate implementation="com.theshued.ss14editor.Ss14BackspaceHandler"/>
         <enterHandlerDelegate implementation="com.theshued.ss14editor.Ss14EnterHandler"/>
         <notificationGroup id="SS14 Editor" displayType="BALLOON"/>
+        <gotoDeclarationHandler implementation="com.theshued.ss14editor.Ss14GotoDeclarationHandler"/>
+        <colorSettingsPage implementation="com.theshued.ss14editor.Ss14ColorSettingsPage"/>
         <applicationConfigurable parentId="tools"
                                  id="com.theshued.ss14editor.settings"
                                  instance="com.theshued.ss14editor.Ss14Configurable"

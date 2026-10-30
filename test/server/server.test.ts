@@ -124,6 +124,7 @@ describe('language server', () => {
       completionProvider: { triggerCharacters: [' ', ':', '/'] },
       hoverProvider: true,
       definitionProvider: true,
+      semanticTokensProvider: { legend: { tokenTypes: ['ss14Component'], tokenModifiers: [] }, full: true },
       executeCommandProvider: {
         commands: ['ss14editor.rebuildSchema', 'ss14editor.rebuildPrototypeIndex'],
       },

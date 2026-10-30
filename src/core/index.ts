@@ -69,7 +69,7 @@ export type {
 } from './prototype-index';
 
 export { completionsAt, opensSuggestOnNewLine, reopensSuggestAfterDeletion } from './completion';
-export { diagnosticsFor } from './diagnostics';
+export { componentNameRanges, diagnosticsFor } from './diagnostics';
 export type { DiagnosticCode, PrototypeDiagnostic } from './diagnostics';
 export type { CompletionCandidate } from './completion';
 export type { ResourceEntry, ResourceTree } from './resource-paths';

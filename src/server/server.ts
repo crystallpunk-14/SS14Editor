@@ -10,6 +10,7 @@ import {
   MarkupKind,
   ProposedFeatures,
   RequestType,
+  SemanticTokensBuilder,
   TextDocuments,
   TextDocumentSyncKind,
   type CompletionItem,
@@ -24,6 +25,7 @@ import {
   ClassLocator,
   classDefinitionAt,
   completionsAt,
+  componentNameRanges,
   definitionAt,
   hoverAt,
   hoverMarkdown,
@@ -78,6 +80,9 @@ interface ShouldSuggestParams {
 
 const ShouldSuggestRequest = new RequestType<ShouldSuggestParams, boolean, void>('ss14/shouldSuggest');
 
+/** The one semantic token type: a component name in a component registry. */
+const COMPONENT_TOKEN = 'ss14Component';
+
 const REBUILD_SCHEMA_COMMAND = 'ss14editor.rebuildSchema';
 const REBUILD_PROTOTYPE_INDEX_COMMAND = 'ss14editor.rebuildPrototypeIndex';
 
@@ -110,6 +115,7 @@ const recheckOpenDocuments = () => diagnostics.recheckAll(documents.keys());
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   options = (params.initializationOptions ?? {}) as InitOptions;
+  semanticTokensRefresh = params.capabilities.workspace?.semanticTokens?.refreshSupport === true;
   reporter.setLocale(localeOf(options.locale));
   const rootUri = params.workspaceFolders?.[0]?.uri ?? params.rootUri;
   rootPath = rootUri?.startsWith('file:') ? fileURLToPath(rootUri) : undefined;
@@ -121,6 +127,8 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       completionProvider: { triggerCharacters: [' ', ':', '/'] },
       hoverProvider: true,
       definitionProvider: true,
+      // Component names, for a client to colour on its own (Rider: a configurable colour).
+      semanticTokensProvider: { legend: { tokenTypes: [COMPONENT_TOKEN], tokenModifiers: [] }, full: true },
       executeCommandProvider: { commands: [REBUILD_SCHEMA_COMMAND, REBUILD_PROTOTYPE_INDEX_COMMAND] },
     },
     serverInfo: { name: 'SS14 Prototype Editor' },
@@ -141,6 +149,8 @@ connection.onInitialized(() => {
   prototypes = new IndexService(fork, storagePath, reporter);
   schema.onDidChange(() => {
     classLocator = undefined;
+    // Which sequences are component registries is the schema's to say.
+    if (semanticTokensRefresh) void connection.languages.semanticTokens.refresh();
     recheckOpenDocuments();
   });
   fork.onDidChange(() => {
@@ -218,6 +228,20 @@ connection.onCompletion(({ textDocument, position }) => {
   resources ??= createResourceTree(root.path);
   const candidates = completionsAt(document.getText(), document.offsetAt(position), context.schema, context.index, resources);
   return candidates.map((candidate) => toCompletionItem(document, candidate));
+});
+
+/** Whether the client can be told to re-ask for semantic tokens (`workspace/semanticTokens/refresh`). */
+let semanticTokensRefresh = false;
+
+connection.languages.semanticTokens.on(({ textDocument }) => {
+  const context = contextFor(textDocument.uri);
+  const builder = new SemanticTokensBuilder();
+  if (!context) return builder.build();
+  for (const [start, end] of componentNameRanges(context.document.getText(), context.schema)) {
+    const position = context.document.positionAt(start);
+    builder.push(position.line, position.character, end - start, 0, 0);
+  }
+  return builder.build();
 });
 
 connection.onHover(({ textDocument, position }) => {

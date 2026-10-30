@@ -12,6 +12,9 @@ import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.LspServerDescriptor
 import com.intellij.platform.lsp.api.customization.LspCompletionCustomizer
 import com.intellij.platform.lsp.api.customization.LspCustomization
+import com.intellij.platform.lsp.api.customization.LspGoToDefinitionCustomizer
+import com.intellij.platform.lsp.api.customization.LspGoToDefinitionDisabled
+import com.intellij.platform.lsp.api.customization.LspSemanticTokensCustomizer
 import org.eclipse.lsp4j.services.LanguageServer
 import java.nio.file.Path
 
@@ -64,9 +67,15 @@ class Ss14LspServerDescriptor(project: Project, root: VirtualFile, private val n
     /** `ss14/shouldSuggest` on top of LSP (stage 3). */
     override val lsp4jServerClass: Class<out LanguageServer> = Ss14LanguageServer::class.java
 
-    /** Completion that reopens the list after a candidate that continues. */
     override val lspCustomization: LspCustomization = object : LspCustomization() {
+        /** Completion that reopens the list after a candidate that continues. */
         override val completionCustomizer: LspCompletionCustomizer = Ss14CompletionSupport()
+
+        /** Component names in their own, configurable colour. */
+        override val semanticTokensCustomizer: LspSemanticTokensCustomizer = Ss14SemanticTokensSupport()
+
+        /** [Ss14GotoDeclarationHandler] serves go-to-definition, so Ctrl+hover shows links; not twice. */
+        override val goToDefinitionCustomizer: LspGoToDefinitionCustomizer = LspGoToDefinitionDisabled
     }
 
     override fun createCommandLine(): GeneralCommandLine {
