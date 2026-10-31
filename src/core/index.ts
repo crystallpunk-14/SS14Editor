@@ -69,18 +69,21 @@ export type {
 } from './prototype-index';
 
 export { completionsAt, opensSuggestOnNewLine, reopensSuggestAfterDeletion } from './completion';
+export { componentNameRanges, diagnosticsFor } from './diagnostics';
+export type { DiagnosticCode, PrototypeDiagnostic } from './diagnostics';
 export type { CompletionCandidate } from './completion';
 export type { ResourceEntry, ResourceTree } from './resource-paths';
-export { classDefinitionAt, definitionAt } from './definition';
-export type { ClassDefinition, DefinitionTarget } from './definition';
-export { hoverAt, hoverMarkdown, readableTypeName } from './hover';
+export { classDefinitionAt, definitionAt, fieldDefinitionAt } from './definition';
+export type { ClassDefinition, DefinitionTarget, FieldDefinition } from './definition';
+export { hoverAt, hoverMarkdown, readableTypeName, withSourceSummary } from './hover';
 export type { ClassHover, FieldHover, HoverContent } from './hover';
-export { ClassLocator, classDeclarationsIn } from './class-location';
-export type { ClassDeclaration, ClassLocation, CsSourceTree } from './class-location';
+export { ClassLocator, baseClassOf, classDeclarationsIn, docSummaryBefore, memberOffsetIn } from './class-location';
+export type { ClassDeclaration, ClassLocation, CsSourceTree, MemberLocation } from './class-location';
 
 export {
   parsePrototypeFile,
   positionAt,
+  scalarSites,
   resolveField,
   cursorContextAt,
   replaceScalarValue,
@@ -93,6 +96,7 @@ export type {
   ParseResult,
   PrototypeFile,
   PrototypeParseError,
+  ScalarSite,
   NodeRange,
   TextPosition,
   FieldAddress,

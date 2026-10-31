@@ -807,11 +807,20 @@ public sealed class FieldExtractor
                 // Try FlagsFor lookup first (TTag is an empty tag class)
                 var tagFull = tTag.FullName ?? tTag.Name;
                 if (_flagTagToEnumType.TryGetValue(tagFull, out var enumType))
+                {
                     vals = SafeEnumValues(enumType);
+                    // The field is an `int`; name it by its flags enum, so the
+                    // enum table keys its values by that enum rather than by
+                    // `System.Int32`, which every flags field shares.
+                    meta.FullType = enumType.FullName ?? enumType.Name;
+                }
                 // TTag itself may be a [Flags] enum in some forks
                 else if (tTag.IsEnum && tTag.CustomAttributes.Any(
                     a => a.AttributeType.Name == "FlagsAttribute"))
+                {
                     vals = SafeEnumValues(tTag);
+                    meta.FullType = tTag.FullName ?? tTag.Name;
+                }
                 meta.FieldKind = "flags";
                 meta.EnumValues = vals;
                 meta.ProtoTypeArg = null;

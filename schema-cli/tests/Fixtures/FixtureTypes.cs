@@ -18,6 +18,14 @@ internal sealed class PrototypeAttribute : Attribute
 [AttributeUsage(AttributeTargets.Class)]
 internal sealed class RegisterComponentAttribute : Attribute { }
 
+// The engine's registration-name override, e.g. [ComponentProtoName("ContainerContainer")].
+[AttributeUsage(AttributeTargets.Class)]
+internal sealed class ComponentProtoNameAttribute : Attribute
+{
+    public ComponentProtoNameAttribute(string name) { Name = name; }
+    public string Name { get; }
+}
+
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct)]
 internal sealed class DataDefinitionAttribute : Attribute { }
 
@@ -123,6 +131,16 @@ internal sealed class FixtureConcreteEffect : FixtureBaseEffect
 {
     [DataField] public string? Message;
 }
+
+[RegisterComponent, ComponentProtoName("FixtureRenamed")]
+internal class FixtureContainerManagerComponent
+{
+    [DataField] public bool Occludes;
+}
+
+// No attribute of its own: the engine names it after its parent's.
+[RegisterComponent]
+internal sealed class FixtureDerivedContainerManagerComponent : FixtureContainerManagerComponent { }
 
 [RegisterComponent]
 internal sealed class FixtureLightComponent
@@ -266,6 +284,26 @@ internal sealed class FixturePhysicsData
 
     [DataField("mask", false, 1, false, false, typeof(FlagSerializer<FixtureCollisionMask>))]
     public int CollisionMask;
+}
+
+// A second, unrelated flags enum on another `int` field: both fields are
+// `System.Int32` in C#, and each must keep its own enum's values.
+internal sealed class FixtureAmmoTag { }
+
+[Flags]
+[FlagsFor(typeof(FixtureAmmoTag))]
+internal enum FixtureAmmoFlags
+{
+    None          = 0,
+    ChangeFireCost = 1 << 0,
+    ChangeFireRate = 1 << 1,
+}
+
+[DataDefinition]
+internal sealed class FixtureAmmoData
+{
+    [DataField("flags", false, 1, false, false, typeof(FlagSerializer<FixtureAmmoTag>))]
+    public int Flags;
 }
 
 // ---------- ConstantsFor fixture ----------

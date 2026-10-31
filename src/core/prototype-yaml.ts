@@ -261,6 +261,41 @@ export function positionAt(file: PrototypeFile, offset: number): TextPosition {
   return { line: line - 1, character: col - 1 };
 }
 
+/** One plain scalar of the document — a map key or a value — as a whole-file check sees it. */
+export interface ScalarSite {
+  /** `[start, end)` of the scalar as written: quotes included, tag and comment excluded. */
+  readonly range: readonly [number, number];
+  /** Its string form; numbers and booleans as written in canonical form. */
+  readonly value: string;
+  /** True for a map key, false for a value or a sequence item. */
+  readonly isKey: boolean;
+}
+
+/**
+ * Every scalar key and value of the first document, in source order — for
+ * checks that look at the whole file (diagnostics) rather than at one caret.
+ * `null` scalars, aliases and non-scalar keys are skipped.
+ */
+export function scalarSites(file: PrototypeFile): ScalarSite[] {
+  const sites: ScalarSite[] = [];
+  const visit = (node: unknown, isKey: boolean): void => {
+    if (isMap(node)) {
+      for (const pair of node.items) {
+        visit(pair.key, true);
+        visit(pair.value, false);
+      }
+    } else if (isSeq(node)) {
+      for (const item of node.items) visit(item, false);
+    } else if (isScalar(node)) {
+      const value = scalarString(node);
+      const range = node.range;
+      if (value !== undefined && range) sites.push({ range: [range[0], range[1]], value, isKey });
+    }
+  };
+  visit(must(file).root, false);
+  return sites;
+}
+
 // ---------------------------------------------------------------------------
 // AST helpers (module-private — never surfaced)
 // ---------------------------------------------------------------------------

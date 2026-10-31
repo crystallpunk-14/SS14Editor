@@ -41,6 +41,15 @@ export interface ClassLocation {
   readonly name: string;
 }
 
+/** A member declaration to jump to: fork-relative file plus where its name is written. */
+export interface MemberLocation extends ClassLocation {
+  /** Its `/// <summary>` as plain text, or `null` when it has none. */
+  readonly summary: string | null;
+}
+
+/** Base classes followed when a field is not declared on its owner itself. */
+const MAX_BASE_DEPTH = 8;
+
 /** The C# projects a component can live in: content projects and the engine submodule's. */
 const PROJECT_FILE = /^(?:Content\.[^/]+|RobustToolbox\/Robust\.[^/]+)\/.+\.cs$/;
 
@@ -84,6 +93,67 @@ export class ClassLocator {
     return this.matchesIn(files, name, namespace);
   }
 
+  /**
+   * The `/// <summary>` of `fullName`'s declaration — the first part of a
+   * partial class that has one — as plain text; `null` when none does. What
+   * hover shows when the schema carries no summary: forks rarely build XML docs.
+   */
+  async classSummary(fullName: string): Promise<string | null> {
+    for (const location of await this.locate(fullName)) {
+      const text = await this.textOf(location.filePath);
+      const summary = text === undefined ? null : docSummaryBefore(text, location.offset);
+      if (summary) return summary;
+    }
+    return null;
+  }
+
+  /**
+   * Where the field or property `member` of class `fullName` is declared — on
+   * the class itself (any part of it) or, failing that, on its base classes,
+   * which are looked up by short name. Empty when it is found on none.
+   */
+  async locateMember(fullName: string, member: string): Promise<MemberLocation[]> {
+    let classes: ClassLocation[] = await this.locate(fullName);
+    const seen = new Set<string>();
+    for (let depth = 0; depth <= MAX_BASE_DEPTH && classes.length > 0; depth++) {
+      const bases = new Set<string>();
+      const found: MemberLocation[] = [];
+      for (const location of classes) {
+        const text = await this.textOf(location.filePath);
+        if (text === undefined) continue;
+        const offset = memberOffsetIn(text, location.offset, member);
+        if (offset !== null) {
+          found.push({ filePath: location.filePath, offset, name: member, summary: docSummaryBefore(text, offset) });
+        }
+        const base = baseClassOf(text, location.offset);
+        if (base !== null && !seen.has(base)) bases.add(base);
+      }
+      if (found.length > 0) return found;
+      for (const base of bases) seen.add(base);
+      classes = (await Promise.all([...bases].map((base) => this.locateShortName(base)))).flat();
+    }
+    return [];
+  }
+
+  /** Every declaration of a class by its short name, in any namespace. */
+  private async locateShortName(name: string): Promise<ClassLocation[]> {
+    const files = await this.projectFiles();
+    const named = await this.matchesIn(
+      files.filter((path) => isNamedAfter(path, name)),
+      name,
+      undefined,
+    );
+    if (named.length > 0) return named;
+    await this.scanAll(files);
+    return this.matchesIn(files, name, undefined);
+  }
+
+  /** A file's BOM-stripped text — the text declaration offsets are into. */
+  private async textOf(path: string): Promise<string | undefined> {
+    const text = await this.source.readFile(path).catch(() => undefined);
+    return text !== undefined && text.charCodeAt(0) === BOM ? text.slice(1) : text;
+  }
+
   private async projectFiles(): Promise<readonly string[]> {
     if (this.files) return this.files;
     const listed = await this.source.listFiles().catch(() => undefined);
@@ -93,11 +163,16 @@ export class ClassLocator {
     return this.files;
   }
 
-  private async matchesIn(files: readonly string[], name: string, namespace: string | null): Promise<ClassLocation[]> {
+  /** Declarations of `name` in `files`; in `namespace` only, unless that is `undefined`. */
+  private async matchesIn(
+    files: readonly string[],
+    name: string,
+    namespace: string | null | undefined,
+  ): Promise<ClassLocation[]> {
     const perFile = await Promise.all(files.map((path) => this.declarationsOf(path)));
     return files.flatMap((filePath, i) =>
       perFile[i]
-        .filter((decl) => decl.name === name && decl.namespace === namespace)
+        .filter((decl) => decl.name === name && (namespace === undefined || decl.namespace === namespace))
         .map((decl) => ({ filePath, offset: decl.offset, name })),
     );
   }
@@ -297,6 +372,137 @@ function blankCommentsAndStrings(text: string): string {
 
   walkCode(0, false);
   return out.join('');
+}
+
+// ---------------------------------------------------------------------------
+// Members, base classes and doc comments
+// ---------------------------------------------------------------------------
+
+/**
+ * Offset of the field or property `member` declared directly in the class body
+ * whose name is at `classOffset` — at the body's own brace depth, so a local or
+ * a statement inside a method never counts. `null` when the body declares none.
+ * `text` is BOM-stripped.
+ */
+export function memberOffsetIn(text: string, classOffset: number, member: string): number | null {
+  const code = blankCommentsAndStrings(text);
+  const open = bodyStart(code, classOffset);
+  if (open === null) return null;
+
+  // A name after a type (`string? Sprite`, `List<int> Ids`, `int[] Ids`) and
+  // before an initializer, `;`, a property's accessors or `=>`.
+  const declaration = new RegExp(String.raw`[\w>\]?]\s+(${escapeRegExp(member)})\s*(?:[=;{]|=>)`, 'y');
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    const c = code[i];
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return null;
+    } else if (depth === 1) {
+      declaration.lastIndex = i;
+      const match = declaration.exec(code);
+      // Past the type's last character and the whitespace, the name is the first thing.
+      if (match) return match.index + match[0].indexOf(member, 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * The short name of the class the declaration at `classOffset` derives from —
+ * the first entry of its base list, generic arguments and namespace dropped —
+ * or `null` when it has none, or the first entry is an interface (`IFoo`).
+ */
+export function baseClassOf(text: string, classOffset: number): string | null {
+  const code = blankCommentsAndStrings(text);
+  const open = bodyStart(code, classOffset);
+  const header = code.slice(classOffset, open ?? undefined);
+  const colon = topLevelIndexOf(header, ':');
+  if (colon < 0) return null;
+  const list = header.slice(colon + 1).split(/\bwhere\b/)[0];
+  const comma = topLevelIndexOf(list, ',');
+  const first = (comma < 0 ? list : list.slice(0, comma)).replace(/<[\s\S]*$/, '').trim();
+  const name = first.slice(first.lastIndexOf('.') + 1);
+  if (!/^[A-Za-z_]\w*$/.test(name) || /^I[A-Z]/.test(name)) return null;
+  return name;
+}
+
+/**
+ * The `/// <summary>` written above the declaration at `offset` — over its
+ * attributes, which may span lines — as plain text: tags dropped, a
+ * `<see cref>` reduced to its short name, whitespace collapsed. `null` when
+ * there is none, or it is only `<inheritdoc/>`. `text` is BOM-stripped.
+ */
+export function docSummaryBefore(text: string, offset: number): string | null {
+  const lines = text.slice(0, offset).split('\n');
+  lines.pop(); // the declaration's own line, up to the name
+  const doc: string[] = [];
+  let brackets = 0;
+  while (lines.length > 0) {
+    const line = (lines.pop() ?? '').trim();
+    if (line.startsWith('///')) {
+      if (brackets > 0) break;
+      doc.unshift(line.slice(3));
+      continue;
+    }
+    if (doc.length > 0) break;
+    brackets += count(line, ']') - count(line, '[');
+    // An attribute line, part of one, or a plain comment or directive among them.
+    if (brackets > 0 || line.startsWith('[') || line.startsWith('//') || line.startsWith('#')) continue;
+    break;
+  }
+  if (doc.length === 0) return null;
+
+  const xml = doc.join('\n');
+  const summary = /<summary>([\s\S]*?)<\/summary>/.exec(xml)?.[1] ?? (/<\w/.test(xml) ? '' : xml);
+  const plain = summary
+    .replace(/<see(?:also)?\s+(?:cref|href)="(?:\w:)?([^"]*)"\s*\/>/g, (_, ref: string) => shortRef(ref))
+    .replace(/<(?:see|paramref|typeparamref)\s+(?:langword|name)="([^"]*)"\s*\/>/g, '$1')
+    // Block tags part words; inline ones (`<c>`, `<b>`) wrap them.
+    .replace(/<\/?(?:para|br|list|item|description|term)\b[^>]*>/g, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return plain || null;
+}
+
+/** A `cref` as its short name: `Content.Shared.Foo.BarComponent` -> `BarComponent`, `M:A.B.Run(int)` -> `Run`. */
+function shortRef(ref: string): string {
+  const bare = ref.replace(/[({].*$/, '').replace(/`\d+/g, '');
+  return bare.slice(bare.lastIndexOf('.') + 1);
+}
+
+/** Index of the `{` opening the body of the class named at `classOffset`; `null` for none (`record R(int A);`). */
+function bodyStart(code: string, classOffset: number): number | null {
+  for (let i = classOffset; i < code.length; i++) {
+    if (code[i] === '{') return i;
+    if (code[i] === ';') return null;
+  }
+  return null;
+}
+
+/** First `char` in `text` outside `<…>` and `(…)`, or -1. */
+function topLevelIndexOf(text: string, char: string): number {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '<' || c === '(') depth++;
+    else if (c === '>' || c === ')') depth--;
+    else if (c === char && depth === 0) return i;
+  }
+  return -1;
+}
+
+function count(text: string, char: string): number {
+  return text.split(char).length - 1;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function lineEnd(text: string, from: number): number {
