@@ -17,7 +17,8 @@
  * know — has no hover.
  */
 
-import { contextAt, fieldAt } from './completion';
+import type { ClassLocator } from './class-location';
+import { contextAt, fieldOwnerAt } from './completion';
 import { classAt, idSpanAt } from './definition';
 import { parsePrototypeFile } from './prototype-yaml';
 import type { FieldMetadata, SchemaRoot } from './schema-contract';
@@ -51,6 +52,10 @@ export interface FieldHover {
   readonly default: string | null;
   /** A `[DataField(required: true)]` field. */
   readonly required: boolean;
+  /** The C# member behind the tag — what its declaration is looked up by. */
+  readonly member: string;
+  /** Full C# name of the class the field was found on (it may be declared on a base); `null` when unknown. */
+  readonly owner: string | null;
 }
 
 /** The hover for `offset` in `text`, or `null` when the caret names nothing the schema documents. */
@@ -72,9 +77,10 @@ export function hoverAt(text: string, offset: number, schema: SchemaRoot): Hover
     };
   }
 
-  const field = fieldAt(ctx, schema);
-  const origin = field && idSpanAt(file.text, offset);
-  if (!field || !origin) return null;
+  const owned = fieldOwnerAt(ctx, schema);
+  const origin = owned && idSpanAt(file.text, offset);
+  if (!owned || !origin) return null;
+  const { field, owner } = owned;
   return {
     origin,
     kind: 'field',
@@ -83,7 +89,36 @@ export function hoverAt(text: string, offset: number, schema: SchemaRoot): Hover
     summary: summaryOf(field),
     default: defaultOf(field),
     required: field.required,
+    member: field.name,
+    owner,
   };
+}
+
+/**
+ * `hover` with its summary read from the `///` comment in source when the
+ * schema has none — forks rarely build XML docs, so it seldom does. A lookup
+ * slower than `timeoutMs` (a first full scan of the sources) is not waited for:
+ * the hover shows without it, and the locator keeps what it read for next time.
+ */
+export async function withSourceSummary(
+  hover: HoverContent,
+  locator: ClassLocator,
+  timeoutMs: number,
+): Promise<HoverContent> {
+  if (hover.summary !== null) return hover;
+  const lookup: Promise<string | null> =
+    hover.kind !== 'field'
+      ? locator.classSummary(hover.type)
+      : hover.owner === null
+        ? Promise.resolve(null)
+        : locator
+            .locateMember(hover.owner, hover.member)
+            .then((members) => members.find((member) => member.summary)?.summary ?? null);
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), timeoutMs)));
+  const summary = await Promise.race([lookup.catch(() => null), timeout]).finally(() => clearTimeout(timer));
+  return summary ? { ...hover, summary } : hover;
 }
 
 /** A summary, with the empty one the CLI may write read as none. */

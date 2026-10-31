@@ -13,7 +13,7 @@
  * field has no target.
  */
 
-import { contextAt, protoRefKindAt, typeTagMemberAt } from './completion';
+import { contextAt, fieldOwnerAt, protoRefKindAt, typeTagMemberAt } from './completion';
 import type { PrototypeIndexView, PrototypeRecord } from './prototype-index';
 import { parsePrototypeFile, type CursorContext, type PrototypeFile } from './prototype-yaml';
 import type { SchemaRoot } from './schema-contract';
@@ -74,6 +74,30 @@ export interface ClassDefinition {
 export function classDefinitionAt(text: string, offset: number, schema: SchemaRoot): ClassDefinition | null {
   const file = parsePrototypeFile(text);
   return file.ok ? classAt(file, contextAt(file, offset, schema), offset, schema) : null;
+}
+
+/** A C# field or property to jump to, and which key it was asked from. */
+export interface FieldDefinition {
+  /** `[start, end)` of the key under the caret. */
+  readonly origin: readonly [number, number];
+  /** Full C# name of the class the field was found on — it may be declared on a base. */
+  readonly owner: string;
+  /** The C# member behind the key — for `ClassLocator.locateMember`. */
+  readonly member: string;
+}
+
+/**
+ * The C# field a key names — of a component, a `[DataDefinition]` (through any
+ * `!type:` on the way) or the prototype itself. `null` off a key, and for a key
+ * the schema has no field by. Where that field is declared is the
+ * `ClassLocator`'s question, asked by the host.
+ */
+export function fieldDefinitionAt(text: string, offset: number, schema: SchemaRoot): FieldDefinition | null {
+  const file = parsePrototypeFile(text);
+  if (!file.ok) return null;
+  const owned = fieldOwnerAt(contextAt(file, offset, schema), schema);
+  const origin = owned?.owner ? idSpanAt(file.text, offset) : null;
+  return owned?.owner && origin ? { origin, owner: owned.owner, member: owned.field.name } : null;
 }
 
 /**

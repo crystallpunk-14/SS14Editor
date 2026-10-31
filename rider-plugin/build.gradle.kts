@@ -11,6 +11,10 @@ plugins {
 group = "com.theshued.ss14editor"
 version = providers.gradleProperty("pluginVersion").get()
 
+/** A complete local Rider install named by gradle property `name`, or `null`. */
+fun localRider(name: String): String? =
+    providers.gradleProperty(name).orNull?.takeIf { it.isNotBlank() && file(it).resolve("product-info.json").isFile }
+
 repositories {
     mavenCentral()
     intellijPlatform {
@@ -20,10 +24,18 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        // A local Rider (`-PriderPath=...`) keeps a dev build off the ~1.5 GB SDK
-        // download; without one (CI) the SDK of `riderVersion` is fetched.
-        val local = providers.gradleProperty("riderPath").orNull?.takeIf { file(it).isDirectory }
-        if (local != null) local(local) else rider(providers.gradleProperty("riderVersion"))
+        // The oldest supported Rider (gradle.properties): a local install of it
+        // when `riderPath` names one, else its SDK — from the IntelliJ Maven
+        // repository rather than download.jetbrains.com, which answers 451 in
+        // some regions.
+        val local = localRider("riderPath")
+        if (local != null) {
+            local(local)
+        } else {
+            rider(providers.gradleProperty("riderVersion")) { useInstaller = false }
+            // The Maven SDK carries no runtime; take the JetBrains Runtime it was built for.
+            jetbrainsRuntime()
+        }
         bundledPlugins("org.jetbrains.plugins.yaml", "JavaScript")
         testFramework(TestFrameworkType.Platform)
     }
@@ -69,9 +81,13 @@ intellijPlatform {
     // for — the same check JetBrains Marketplace runs on upload.
     pluginVerification {
         ides {
-            val local = providers.gradleProperty("riderPath").orNull?.takeIf { file(it).isDirectory }
-            if (local != null) local(local)
-            else create(IntelliJPlatformType.Rider, providers.gradleProperty("riderVersion"))
+            // The oldest and the newest supported Rider.
+            val oldest = localRider("riderPath")
+            if (oldest != null) local(oldest)
+            else create(IntelliJPlatformType.Rider, providers.gradleProperty("riderVersion")) { useInstaller = false }
+            val newest = localRider("riderLatestPath")
+            if (newest != null) local(newest)
+            else create(IntelliJPlatformType.Rider, providers.gradleProperty("riderLatestVersion")) { useInstaller = false }
         }
     }
 }

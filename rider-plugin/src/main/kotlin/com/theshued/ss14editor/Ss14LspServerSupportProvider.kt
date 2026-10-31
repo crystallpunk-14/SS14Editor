@@ -1,10 +1,8 @@
 package com.theshued.ss14editor
 
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.logger
-import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.vfs.VirtualFile
@@ -17,8 +15,6 @@ import com.intellij.platform.lsp.api.customization.LspGoToDefinitionDisabled
 import com.intellij.platform.lsp.api.customization.LspSemanticTokensCustomizer
 import org.eclipse.lsp4j.services.LanguageServer
 import java.nio.file.Path
-
-private const val PLUGIN_ID = "com.theshued.ss14editor"
 
 private val LOG = logger<Ss14LspServerSupportProvider>()
 
@@ -60,7 +56,8 @@ class Ss14LspServerSupportProvider : LspServerSupportProvider {
 class Ss14LspServerDescriptor(project: Project, root: VirtualFile, private val node: String) :
     LspServerDescriptor(project, "SS14 Prototype Editor", root) {
     private val serverDir: Path =
-        PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID))!!.pluginPath.resolve("server")
+        // `<plugin>/lib/<this>.jar` -> `<plugin>/server`: the plugin managers' lookups are internal API.
+        Path.of(PathManager.getJarPathForClass(Ss14LspServerDescriptor::class.java)!!).parent.parent.resolve("server")
 
     override fun isSupportedFile(file: VirtualFile): Boolean = isPrototypeFile(file)
 

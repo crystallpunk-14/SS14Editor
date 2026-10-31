@@ -42,8 +42,11 @@
    ./gradlew buildPlugin test verifyPlugin
    ```
 
-   `verifyPlugin` должен закончиться `Compatible` без предупреждений: тот же
-   Plugin Verifier Marketplace запускает при загрузке. В zip должны быть
+   `verifyPlugin` проверяет самую старую (`riderVersion`) и самую новую
+   (`riderLatestVersion`) поддерживаемые версии Rider из `gradle.properties` —
+   перед релизом поднять `riderLatestVersion` до текущей. Обе должны быть
+   `Compatible` без internal API; deprecated допустимы (переименованное LSP API,
+   см. ADR-0002). Тот же Plugin Verifier Marketplace запускает при загрузке. В zip должны быть
    `lib/`, `server/dist/server.js`, `server/dist/prototype-index-worker.js`,
    `server/assets/schema-cli/`.
 3. Поставить zip в свой Rider (**Settings → Plugins → ⚙ → Install Plugin from

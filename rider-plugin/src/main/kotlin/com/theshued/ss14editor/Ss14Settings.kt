@@ -10,9 +10,9 @@ import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.DialogPanel
 import com.intellij.platform.lsp.api.LspServerManager
-import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.dsl.builder.bindItem
 import com.intellij.ui.dsl.builder.panel
+import com.intellij.ui.dsl.listCellRenderer.textListCellRenderer
 import org.jetbrains.annotations.PropertyKey
 import java.text.MessageFormat
 import java.util.Locale
@@ -92,7 +92,7 @@ class Ss14Configurable : BoundConfigurable("SS14 Prototype Editor") {
             row(Ss14Bundle.message("settings.language")) {
                 comboBox(
                     Ss14Language.entries,
-                    SimpleListCellRenderer.create("") { language ->
+                    textListCellRenderer { language ->
                         when (language) {
                             Ss14Language.AUTO -> Ss14Bundle.message("settings.language.auto")
                             Ss14Language.EN -> "English"

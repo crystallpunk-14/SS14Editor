@@ -27,11 +27,13 @@ import {
   completionsAt,
   componentNameRanges,
   definitionAt,
+  fieldDefinitionAt,
   hoverAt,
   hoverMarkdown,
   opensSuggestOnNewLine,
   PROTOTYPE_ROOTS,
   reopensSuggestAfterDeletion,
+  withSourceSummary,
   type CompletionCandidate,
   type ResourceTree,
 } from '../core';
@@ -244,22 +246,32 @@ connection.languages.semanticTokens.on(({ textDocument }) => {
   return builder.build();
 });
 
-connection.onHover(({ textDocument, position }) => {
+/** How long hover waits for a summary from source before showing without it; the lookup still finishes and is cached. */
+const SOURCE_SUMMARY_TIMEOUT_MS = 1500;
+
+connection.onHover(async ({ textDocument, position }) => {
   const context = contextFor(textDocument.uri);
   if (!context) return null;
   const { document } = context;
-  const hover = hoverAt(document.getText(), document.offsetAt(position), context.schema);
-  if (!hover) return null;
+  const found = hoverAt(document.getText(), document.offsetAt(position), context.schema);
+  if (!found) return null;
+  const hover = await withSourceSummary(found, locatorFor(context.root.path), SOURCE_SUMMARY_TIMEOUT_MS);
   return {
     contents: { kind: MarkupKind.Markdown, value: hoverMarkdown(hover) },
     range: rangeIn(document, hover.origin),
   };
 });
 
+/** The fork's class locator, made on first use and dropped when the schema or fork changes. */
+function locatorFor(forkRoot: string): ClassLocator {
+  return (classLocator ??= new ClassLocator(createCsSourceTree(forkRoot)));
+}
+
 /**
  * A prototype id jumps to its declaration (engine prototypes resolve the same
  * way, into `RobustToolbox/Resources/EnginePrototypes/`); a component name or a
- * `!type:` tag to its C# class — one link per part of a partial class.
+ * `!type:` tag to its C# class — one link per part of a partial class; a field
+ * key to its C# field or property, on the owner or one of its bases.
  */
 connection.onDefinition(async ({ textDocument, position }): Promise<LocationLink[] | null> => {
   const context = contextFor(textDocument.uri);
@@ -275,10 +287,21 @@ connection.onDefinition(async ({ textDocument, position }): Promise<LocationLink
     return link ? [link] : null;
   }
 
+  const field = fieldDefinitionAt(text, offset, context.schema);
+  if (field) {
+    const members = await locatorFor(root.path).locateMember(field.owner, field.member);
+    const links = members
+      .map((member) => {
+        const name: [number, number] = [member.offset, member.offset + member.name.length];
+        return linkTo(root.path, document, field.origin, member.filePath, name, name);
+      })
+      .filter((link) => link !== undefined);
+    return links.length > 0 ? links : null;
+  }
+
   const named = classDefinitionAt(text, offset, context.schema);
   if (!named) return null;
-  classLocator ??= new ClassLocator(createCsSourceTree(root.path));
-  const locations = await classLocator.locate(named.className);
+  const locations = await locatorFor(root.path).locate(named.className);
   const links = locations
     .map((location) => {
       const name: [number, number] = [location.offset, location.offset + location.name.length];

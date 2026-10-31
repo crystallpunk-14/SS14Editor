@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { ClassLocator, classDeclarationsIn, type CsSourceTree } from '../../src/core/class-location';
+import {
+  baseClassOf,
+  ClassLocator,
+  classDeclarationsIn,
+  docSummaryBefore,
+  memberOffsetIn,
+  type CsSourceTree,
+} from '../../src/core/class-location';
 import { classDefinitionAt } from '../../src/core/definition';
 import { parsedFixture, schemaSnapshot } from './prototype-fixtures';
 
@@ -374,5 +381,106 @@ describe('classDefinitionAt — the component name under the caret', () => {
   it('has no target off the component name', () => {
     expect(classDefinitionAt(TEXT, TEXT.indexOf('icon'), SCHEMA)).toBeNull();
     expect(classDefinitionAt(TEXT, TEXT.indexOf('entity'), SCHEMA)).toBeNull();
+  });
+});
+
+describe('docSummaryBefore — the /// summary over a declaration', () => {
+  it('reads the summary over attributes, tags dropped and crefs shortened', () => {
+    const text = [
+      '/// <summary>',
+      '/// Protects from <see cref="T:Content.Shared.Explosion.ExplosionPrototype"/>;',
+      '/// use <c>worn: false</c> to skip the wearer.',
+      '/// </summary>',
+      '[RegisterComponent, NetworkedComponent]',
+      '[Access(typeof(Foo),',
+      '    Other = AccessPermissions.ReadWrite)]',
+      'public sealed partial class ExplosionResistanceComponent : Component',
+    ].join('\n');
+
+    expect(docSummaryBefore(text, text.indexOf('ExplosionResistanceComponent'))).toBe(
+      'Protects from ExplosionPrototype; use worn: false to skip the wearer.',
+    );
+  });
+
+  it('is null without a doc comment, or with only <inheritdoc/>', () => {
+    const plain = '// not a doc\n[DataField]\npublic int Count;';
+    const inherited = '/// <inheritdoc/>\npublic int Count;';
+    expect(docSummaryBefore(plain, plain.indexOf('Count'))).toBeNull();
+    expect(docSummaryBefore(inherited, inherited.indexOf('Count'))).toBeNull();
+  });
+});
+
+describe('memberOffsetIn / baseClassOf — a field in a class body', () => {
+  const TEXT = [
+    'public sealed partial class ClothingComponent : BaseClothingComponent<int>, IComponent',
+    '{',
+    '    [DataField]',
+    '    public SoundSpecifier? EquipSound = new SoundPathSpecifier("/x.ogg");',
+    '    [DataField("slots")] public SlotFlags Slots { get; set; } = SlotFlags.NONE;',
+    '    public int[] Ids;',
+    '    public void Run() { var Local = 1; return Hidden; }',
+    '}',
+  ].join('\n');
+  const classOffset = TEXT.indexOf('ClothingComponent');
+
+  it('finds fields and properties at the body’s own depth', () => {
+    expect(memberOffsetIn(TEXT, classOffset, 'EquipSound')).toBe(TEXT.indexOf('EquipSound'));
+    expect(memberOffsetIn(TEXT, classOffset, 'Slots')).toBe(TEXT.indexOf('Slots {'));
+    expect(memberOffsetIn(TEXT, classOffset, 'Ids')).toBe(TEXT.indexOf('Ids'));
+  });
+
+  it('does not take a local or a statement inside a method for a field', () => {
+    expect(memberOffsetIn(TEXT, classOffset, 'Local')).toBeNull();
+    expect(memberOffsetIn(TEXT, classOffset, 'Hidden')).toBeNull();
+  });
+
+  it('names the base class, generics dropped, and none for interfaces only', () => {
+    expect(baseClassOf(TEXT, classOffset)).toBe('BaseClothingComponent');
+    const onlyInterfaces = 'public sealed class A : IFoo, IBar {}';
+    expect(baseClassOf(onlyInterfaces, onlyInterfaces.indexOf('A '))).toBeNull();
+  });
+});
+
+describe('ClassLocator — members and summaries from source', () => {
+  const files = {
+    'Content.Shared/Clothing/ClothingComponent.cs': [
+      'namespace Content.Shared.Clothing;',
+      '/// <summary>Handles entities which can be equipped.</summary>',
+      'public sealed partial class ClothingComponent : BaseClothing',
+      '{',
+      '    /// <summary>Slots it fits.</summary>',
+      '    [DataField] public string Slots = "";',
+      '}',
+    ].join('\n'),
+    'Content.Shared/Clothing/BaseClothing.cs': [
+      'namespace Content.Shared.Clothing.Base;',
+      'public abstract partial class BaseClothing : Component',
+      '{',
+      '    /// <summary>Worn sprite.</summary>',
+      '    [DataField] public string Sprite = "";',
+      '}',
+    ].join('\n'),
+  };
+
+  it('reads a class summary', async () => {
+    const locator = new ClassLocator(tree(files));
+    expect(await locator.classSummary('Content.Shared.Clothing.ClothingComponent')).toBe(
+      'Handles entities which can be equipped.',
+    );
+  });
+
+  it('finds a field on the class, and one inherited from a base in another namespace', async () => {
+    const locator = new ClassLocator(tree(files));
+    expect(await locator.locateMember('Content.Shared.Clothing.ClothingComponent', 'Slots')).toEqual([
+      {
+        filePath: 'Content.Shared/Clothing/ClothingComponent.cs',
+        offset: files['Content.Shared/Clothing/ClothingComponent.cs'].indexOf('Slots ='),
+        name: 'Slots',
+        summary: 'Slots it fits.',
+      },
+    ]);
+    const [inherited] = await locator.locateMember('Content.Shared.Clothing.ClothingComponent', 'Sprite');
+    expect(inherited).toMatchObject({ filePath: 'Content.Shared/Clothing/BaseClothing.cs', summary: 'Worn sprite.' });
+    expect(await locator.locateMember('Content.Shared.Clothing.ClothingComponent', 'Nope')).toEqual([]);
   });
 });

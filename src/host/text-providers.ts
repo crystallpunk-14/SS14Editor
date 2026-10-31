@@ -5,10 +5,12 @@ import {
   completionsAt,
   classDefinitionAt,
   definitionAt,
+  fieldDefinitionAt,
   hoverAt,
   hoverMarkdown,
   opensSuggestOnNewLine,
   reopensSuggestAfterDeletion,
+  withSourceSummary,
   type CompletionCandidate,
   type PrototypeIndexView,
   type ResourceTree,
@@ -38,7 +40,8 @@ import type { SchemaController } from './schema-controller';
  * simply have no candidates and no target. The same provider jumps from a
  * component name or a `!type:` tag to its C# class (issue #31) through a {@link ClassLocator},
  * which caches what it reads until the next schema change. Hover (issue #30)
- * registers on the same selector and reads the schema alone. A `ResPath` value
+ * registers on the same selector, and reads the same locator for summaries the
+ * schema lacks. A `ResPath` value
  * completes from the fork's `Resources/`, listed afresh on every request
  * (issue #32, ADR-0001), so `/` is a trigger character too.
  */
@@ -96,7 +99,7 @@ export class TextProviderController implements vscode.Disposable {
         selector,
         new PrototypeDefinitionProvider(getSchema, this.prototypeIndex, getLocator, root.uri),
       ),
-      vscode.languages.registerHoverProvider(selector, new PrototypeHoverProvider(getSchema)),
+      vscode.languages.registerHoverProvider(selector, new PrototypeHoverProvider(getSchema, getLocator)),
       triggerSuggestOnEdit(selector, getSchema, this.prototypeIndex, resources),
       vscode.commands.registerCommand(SUGGEST_IF_ANY_COMMAND, () => {
         const editor = vscode.window.activeTextEditor;
@@ -228,7 +231,9 @@ export class PrototypeCompletionProvider implements vscode.CompletionItemProvide
  *
  * On a component name or a `!type:` tag it asks {@link classDefinitionAt} for the
  * class and the {@link ClassLocator} for its declarations instead — one link per part of a
- * partial class, so VS Code jumps straight to a single one and peeks several.
+ * partial class, so VS Code jumps straight to a single one and peeks several. On
+ * a field key ({@link fieldDefinitionAt}) it asks the locator for the field's
+ * declaration, on the owner class or one of its bases.
  */
 export class PrototypeDefinitionProvider implements vscode.DefinitionProvider {
   constructor(
@@ -252,6 +257,19 @@ export class PrototypeDefinitionProvider implements vscode.DefinitionProvider {
       const [start, , end] = found.target.range;
       const link = await this.linkTo(document, found.origin, found.target.filePath, [start, end], [start, start]);
       return link && [link];
+    }
+
+    const field = fieldDefinitionAt(text, offset, schema);
+    if (field) {
+      const members = await this.getLocator().locateMember(field.owner, field.member);
+      const links = await Promise.all(
+        members.map((member) => {
+          const name: [number, number] = [member.offset, member.offset + member.name.length];
+          return this.linkTo(document, field.origin, member.filePath, name, name);
+        }),
+      );
+      const opened = links.filter((link) => link !== undefined);
+      return opened.length > 0 ? opened : undefined;
     }
 
     const named = classDefinitionAt(text, offset, schema);
@@ -299,20 +317,28 @@ export class PrototypeDefinitionProvider implements vscode.DefinitionProvider {
   }
 }
 
+/** How long hover waits for a summary from source before showing without it; the lookup still finishes and is cached. */
+const SOURCE_SUMMARY_TIMEOUT_MS = 1500;
+
 /**
  * Thin adapter over {@link hoverAt}: the core names what the caret is on and
  * renders it ({@link hoverMarkdown}); this only wraps the markdown in a `Hover`
- * over the name it was asked from.
+ * over the name it was asked from. A summary the schema lacks is read from the
+ * `///` in source ({@link withSourceSummary}).
  */
 export class PrototypeHoverProvider implements vscode.HoverProvider {
-  constructor(private readonly getSchema: () => SchemaRoot | null) {}
+  constructor(
+    private readonly getSchema: () => SchemaRoot | null,
+    private readonly getLocator: () => ClassLocator,
+  ) {}
 
-  provideHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
+  async provideHover(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Hover | undefined> {
     const schema = this.getSchema();
     if (!schema) return undefined;
 
-    const hover = hoverAt(document.getText(), document.offsetAt(position), schema);
-    if (!hover) return undefined;
+    const found = hoverAt(document.getText(), document.offsetAt(position), schema);
+    if (!found) return undefined;
+    const hover = await withSourceSummary(found, this.getLocator(), SOURCE_SUMMARY_TIMEOUT_MS);
     const [start, end] = hover.origin;
     return new vscode.Hover(
       new vscode.MarkdownString(hoverMarkdown(hover)),
