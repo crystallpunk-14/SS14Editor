@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { ClassLocator, classDeclarationsIn, type CsSourceTree } from '../../src/core/class-location';
+import {
+  ClassLocator,
+  classDeclarationsIn,
+  docSummaryBefore,
+  type CsSourceTree,
+} from '../../src/core/class-location';
 import { classDefinitionAt } from '../../src/core/definition';
 import { parsedFixture, schemaSnapshot } from './prototype-fixtures';
 
@@ -393,5 +398,67 @@ describe('classDefinitionAt — the component name under the caret', () => {
 
   it('has no target off the component name', () => {
     expect(classDefinitionAt(TEXT, TEXT.indexOf('icon'), SCHEMA)).toBeNull();
+  });
+});
+
+describe('docSummaryBefore — the /// summary over a declaration', () => {
+  it('reads the summary over attributes, tags dropped and crefs shortened', () => {
+    const text = [
+      '/// <summary>',
+      '/// Protects from <see cref="T:Content.Shared.Explosion.ExplosionPrototype"/>;',
+      '/// use <c>worn: false</c> to skip the wearer.',
+      '/// </summary>',
+      '[RegisterComponent, NetworkedComponent]',
+      '[Access(typeof(Foo),',
+      '    Other = AccessPermissions.ReadWrite)]',
+      'public sealed partial class ExplosionResistanceComponent : Component',
+    ].join('\n');
+
+    expect(docSummaryBefore(text, text.indexOf('ExplosionResistanceComponent'))).toBe(
+      'Protects from ExplosionPrototype; use worn: false to skip the wearer.',
+    );
+  });
+
+  it('is null without a doc comment, or with only <inheritdoc/>', () => {
+    const plain = '// not a doc\n[DataField]\npublic int Count;';
+    const inherited = '/// <inheritdoc/>\npublic int Count;';
+    expect(docSummaryBefore(plain, plain.indexOf('Count'))).toBeNull();
+    expect(docSummaryBefore(inherited, inherited.indexOf('Count'))).toBeNull();
+  });
+});
+
+describe('ClassLocator — members and summaries from source', () => {
+  const files = {
+    'Content.Shared/Clothing/ClothingComponent.cs': [
+      'namespace Content.Shared.Clothing;',
+      '/// <summary>Handles entities which can be equipped.</summary>',
+      'public sealed partial class ClothingComponent : BaseClothing',
+      '{',
+      '    /// <summary>Slots it fits.</summary>',
+      '    [DataField] public string Slots = "";',
+      '}',
+    ].join('\n'),
+    'Content.Shared/Clothing/BaseClothing.cs': [
+      'namespace Content.Shared.Clothing.Base;',
+      'public abstract partial class BaseClothing : Component',
+      '{',
+      '    /// <summary>Worn sprite.</summary>',
+      '    [DataField] public string Sprite = "";',
+      '}',
+    ].join('\n'),
+  };
+
+  it('reads a class summary', async () => {
+    const locator = new ClassLocator(tree(files));
+    expect(await locator.classSummary('Content.Shared.Clothing.ClothingComponent')).toBe(
+      'Handles entities which can be equipped.',
+    );
+  });
+
+  it('reads a field\'s summary in the class declaring it, and none for a member it does not declare', async () => {
+    const locator = new ClassLocator(tree(files));
+    expect(await locator.memberSummary('Content.Shared.Clothing.ClothingComponent', 'Slots')).toBe('Slots it fits.');
+    expect(await locator.memberSummary('Content.Shared.Clothing.Base.BaseClothing', 'Sprite')).toBe('Worn sprite.');
+    expect(await locator.memberSummary('Content.Shared.Clothing.ClothingComponent', 'Sprite')).toBeNull();
   });
 });

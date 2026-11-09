@@ -177,6 +177,56 @@ public class MetadataExtractorTests
     }
 
     /// <summary>
+    /// Two <c>FlagSerializer</c> fields over <c>int</c> with different flags
+    /// enums must not share one value list: the enum table used to key them
+    /// both by <c>System.Int32</c>, so every flags field after the first
+    /// pointed at the first one's values.
+    /// </summary>
+    [Fact]
+    public void Extract_FlagSerializer_DistinctEnumsOnIntFields_KeepTheirOwnValues()
+    {
+        using var tmp = StageFixtureAsContentServer();
+        using var doc = RunAndRead(tmp.Path);
+        var root = doc.RootElement;
+
+        System.Collections.Generic.List<string> ValuesOf(string definition, string tag)
+        {
+            var dd = root.GetProperty("dataDefinitions").EnumerateObject()
+                .Single(kv => kv.Value.GetProperty("shortName").GetString() == definition).Value;
+            var field = dd.GetProperty("fields").EnumerateArray()
+                .Single(f => f.GetProperty("tag").GetString() == tag);
+            if (field.TryGetProperty("enumValues", out var inline) && inline.ValueKind == JsonValueKind.Array)
+                return inline.EnumerateArray().Select(e => e.GetString()!).ToList();
+            var enumRef = field.GetProperty("enumRef").GetString()!;
+            return root.GetProperty("enums").GetProperty(enumRef).EnumerateArray().Select(e => e.GetString()!).ToList();
+        }
+
+        var layer = ValuesOf("FixturePhysicsData", "layer");
+        var ammo = ValuesOf("FixtureAmmoData", "flags");
+        Assert.Contains("WallLayer", layer);
+        Assert.DoesNotContain("ChangeFireCost", layer);
+        Assert.Contains("ChangeFireCost", ammo);
+        Assert.DoesNotContain("WallLayer", ammo);
+    }
+
+    /// <summary>
+    /// <c>[ComponentProtoName]</c> names the component in YAML, as the engine's
+    /// component factory registers it — not the class name minus <c>Component</c>.
+    /// </summary>
+    [Fact]
+    public void Extract_ComponentProtoName_OverridesTheClassName()
+    {
+        using var tmp = StageFixtureAsContentServer();
+        using var doc = RunAndRead(tmp.Path);
+        var components = doc.RootElement.GetProperty("components");
+        Assert.True(components.TryGetProperty("FixtureRenamed", out _));
+        Assert.False(components.TryGetProperty("FixtureContainerManager", out _));
+        // Inherited, as Attribute.GetCustomAttribute reads it: the subclass
+        // registers under the same name, so it never shows up on its own.
+        Assert.False(components.TryGetProperty("FixtureDerivedContainerManager", out _));
+    }
+
+    /// <summary>
     /// Verifies that <c>[ConstantsFor(typeof(TTag))]</c> enums are surfaced
     /// under <c>MetadataRoot.EnumConstants</c> keyed by the tag type's full
     /// name. Members from multiple enums sharing the same tag must merge

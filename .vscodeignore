@@ -26,3 +26,6 @@ CLAUDE.md
 CONTEXT.md
 .eslintcache
 assets/**/*.pdb
+rider-plugin/**
+# The language server is the Rider plugin's; the VS Code host does not load it.
+dist/server.js

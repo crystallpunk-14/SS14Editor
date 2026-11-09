@@ -58,14 +58,15 @@ function isLocId(file: PrototypeFile, offset: number, schema: SchemaRoot): boole
 const MAX_HOVER_TEXT = 300;
 
 /**
- * The hover for a LocId: the key, then each locale's text with a link to where
- * it is declared. `linkOf` turns a record and the 0-based line `key` is
- * declared on into a link target (the host knows the fork root). No translations at all reads as "not found".
+ * The hover for a LocId: the key, then each locale's text with where it is
+ * declared. `linkOf` turns a record and the 0-based line `key` is declared on
+ * into a link target (the host knows the fork root); without it the place is
+ * plain text. No translations at all reads as "not found".
  */
 export function locHoverMarkdown(
   key: string,
   translations: readonly LocTranslation[],
-  linkOf: (record: LocRecord, line: number) => string,
+  linkOf?: (record: LocRecord, line: number) => string,
 ): string {
   const head = ['```fluent', key, '```'].join('\n');
   if (translations.length === 0) return `${head}\n\n*No translation found.*`;
@@ -73,7 +74,9 @@ export function locHoverMarkdown(
     const shown = text.length > MAX_HOVER_TEXT ? `${text.slice(0, MAX_HOVER_TEXT)}…` : text;
     const file = record.filePath.slice(record.filePath.lastIndexOf('/') + 1);
     const { line } = declarationSpan(record, key);
-    return `- **${locale}**: ${escapeMarkdown(shown) || '*(empty)*'} — [${escapeMarkdown(file)}:${line + 1}](${linkOf(record, line)})`;
+    const place = `${escapeMarkdown(file)}:${line + 1}`;
+    const where = linkOf ? `[${place}](${linkOf(record, line)})` : place;
+    return `- **${locale}**: ${escapeMarkdown(shown) || '*(empty)*'} — ${where}`;
   });
   return `${head}\n\n${lines.join('\n')}`;
 }

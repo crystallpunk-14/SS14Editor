@@ -154,5 +154,8 @@ describe('presentation', () => {
     expect(markdown).toContain('**ru-RU**: Привет — [skills\\.ftl:1](file:///Resources/Locale/ru-RU/skills.ftl#L1)');
     expect(markdown).toContain('**en-US**: Hello \\*world\\*');
     expect(locHoverMarkdown('k', [], () => '')).toContain('No translation found');
+    const plain = locHoverMarkdown('k', index.translations('k', 'ru-RU'));
+    expect(plain).not.toContain('](');
+    expect(plain).toMatch(/\.ftl:\d+/);
   });
 });

@@ -100,6 +100,8 @@ describe('hoverAt — fields', () => {
       summary: 'Whether the entity is <b>broken</b>.',
       default: 'false',
       required: false,
+      member: 'IsBroken',
+      declaringType: 'Content.Server.Destructible.DestructibleComponent',
     });
   });
 

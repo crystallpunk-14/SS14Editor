@@ -39,6 +39,18 @@ const indexWorkerConfig = {
   external: [],
 };
 
+/**
+ * The stdio language server (Rider plan, stage 0 spike): core + vscode-free host
+ * pieces, spawns the same worker bundle from `dist/`.
+ */
+/** @type {import('esbuild').BuildOptions} */
+const serverConfig = {
+  ...hostConfig,
+  entryPoints: ['src/server/server.ts'],
+  outfile: 'dist/server.js',
+  external: [],
+};
+
 /** @type {import('esbuild').BuildOptions} */
 const smokeConfig = {
   entryPoints: ['test/smoke/activation.test.ts'],
@@ -60,7 +72,7 @@ const localeWorkerConfig = {
   outfile: 'dist/localization-index-worker.js',
 };
 
-const configs = [hostConfig, indexWorkerConfig, localeWorkerConfig, smokeConfig];
+const configs = [hostConfig, indexWorkerConfig, localeWorkerConfig, serverConfig, smokeConfig];
 
 if (watch) {
   const contexts = await Promise.all(configs.map((c) => esbuild.context(c)));

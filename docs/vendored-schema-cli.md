@@ -15,16 +15,17 @@ single record of origin.
 
 | This repo | Predecessor path | Change |
 |---|---|---|
-| `schema-cli/vendor/MetadataExtractor.cs`  | `src/Metadata/MetadataExtractor.cs`  | verbatim |
-| `schema-cli/vendor/FieldExtractor.cs`     | `src/Metadata/FieldExtractor.cs`     | verbatim + `DeclaringTypeName` (see below) |
+| `schema-cli/vendor/MetadataExtractor.cs`  | `src/Metadata/MetadataExtractor.cs`  | patched — see [Local fixes](#local-fixes) |
+| `schema-cli/vendor/FieldExtractor.cs`     | `src/Metadata/FieldExtractor.cs`     | patched — see [Local fixes](#local-fixes), + `DeclaringTypeName` (see [Local changes](#local-changes)) |
 | `schema-cli/vendor/CtorDefaultsScanner.cs`| `src/Metadata/CtorDefaultsScanner.cs`| verbatim |
 | `schema-cli/vendor/XmlDocReader.cs`       | `src/Metadata/XmlDocReader.cs`       | verbatim |
 | `schema-cli/vendor/MetadataModels.cs`     | `src/Metadata/MetadataModels.cs`     | verbatim + `FieldMetadata.DeclaringType` (see below) — the `MetadataRoot` contract |
 | `schema-cli/vendor/Logger.cs`             | `src/Core/Logger.cs`                 | verbatim — the only support dependency of the extractors |
-| `schema-cli/tests/*.cs`, `schema-cli/tests/Fixtures/*.cs` | `tests/ss14-editor.Tests/{MetadataExtractor,FieldExtractor,CtorDefaultsScanner,XmlDocReader}Tests.cs`, `TempDir.cs`, `Fixtures/{FixtureTypes,RuntimeHandleStubs}.cs` | verbatim (except `DeclaringTypeTests.cs`, which is this repo's own) |
+| `schema-cli/tests/*.cs`, `schema-cli/tests/Fixtures/*.cs` (plus the tests for the local fixes) | `tests/ss14-editor.Tests/{MetadataExtractor,FieldExtractor,CtorDefaultsScanner,XmlDocReader}Tests.cs`, `TempDir.cs`, `Fixtures/{FixtureTypes,RuntimeHandleStubs}.cs` | verbatim (except `DeclaringTypeTests.cs`, which is this repo's own) |
 
-The vendored `.cs` files are unmodified byte-for-byte, except for the change
-listed under "Local changes" below (it touches `FieldExtractor.cs` and
+The vendored `.cs` files were copied byte-for-byte, except for the
+[local fixes](#local-fixes) and the change listed under
+[Local changes](#local-changes) (it touches `FieldExtractor.cs` and
 `MetadataModels.cs`). Only the project files
 (`.csproj`), the `InternalsVisibleTo` shim and the entry point
 (`schema-cli/Program.cs`) are new. The spec envisaged a ~30-line entry point;
@@ -66,3 +67,23 @@ extractor's output with two extra root fields before writing it:
 - `schemaVersion` (int) — bumped when the emitted document's shape changes,
 - `sourceFingerprint` (string) — SHA-256 over `path|size|mtime` of every input
   DLL plus the CLI's own version and `schemaVersion`.
+
+## Local fixes
+
+Bugs in the predecessor's extraction, found by the Rider plan's diagnostics
+(stage 4) sweeping a whole fork, fixed here and covered by
+`MetadataExtractorTests`. The CLI version moved to 1.0.1 with them, so every
+cached schema is re-extracted.
+
+- **`[ComponentProtoName]`** (`MetadataExtractor.InferComponentName`): a
+  component is named by that attribute — inherited, as the engine's
+  `ComponentFactory` reads it — before falling back to the class name minus
+  `Component`. Without it `ContainerContainer`, `BreathMask`,
+  `WirelessNetworkConnection` and the like were missing from the schema.
+- **Flags on `int` fields** (`FieldExtractor.ApplyCustomSerializer`,
+  `MetadataExtractor.DeduplicateEnums`): a `FlagSerializer<TTag>` field takes its
+  flags enum as `fullType`, and the enum table never points a field at a value
+  list filed under the same key with different values. Before, every such field
+  was `System.Int32`, and all of them shared the first one's values
+  (`layer:`/`mask:` offered another fork's `ChangeWeaponFireCost`).
+

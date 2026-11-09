@@ -87,6 +87,34 @@ export class ClassLocator {
   }
 
   /**
+   * The `/// <summary>` of `fullName`'s declaration — the first part of a
+   * partial class that has one — as plain text; `null` when none does. What
+   * hover shows when the schema carries no summary: forks rarely build XML docs.
+   */
+  async classSummary(fullName: string): Promise<string | null> {
+    for (const location of await this.locate(fullName)) {
+      const text = await this.textOf(location.filePath);
+      const summary = text === undefined ? null : docSummaryBefore(text, location.offset);
+      if (summary) return summary;
+    }
+    return null;
+  }
+
+  /**
+   * The `/// <summary>` of the field or property `member` in the class
+   * `fullName` that declares it; `null` when it has none or is not found there.
+   */
+  async memberSummary(fullName: string, member: string): Promise<string | null> {
+    for (const location of await this.locate(fullName)) {
+      const text = await this.textOf(location.filePath);
+      const offset = text === undefined ? null : memberDeclarationIn(text, location.offset, member);
+      const summary = text === undefined || offset === null ? null : docSummaryBefore(text, offset);
+      if (summary) return summary;
+    }
+    return null;
+  }
+
+  /**
    * Where `member` (a field or property, by its C# name) is declared in the class
    * `fullName` — one location per part of a partial class that declares it. When
    * no part does (the member is generated, or the sources drifted from the
@@ -402,6 +430,59 @@ function blankCommentsAndStrings(text: string): string {
 
   walkCode(0, false);
   return out.join('');
+}
+
+// ---------------------------------------------------------------------------
+// Doc comments
+// ---------------------------------------------------------------------------
+
+/**
+ * The `/// <summary>` written above the declaration at `offset` — over its
+ * attributes, which may span lines — as plain text: tags dropped, a
+ * `<see cref>` reduced to its short name, whitespace collapsed. `null` when
+ * there is none, or it is only `<inheritdoc/>`. `offset` is into the BOM-stripped text.
+ */
+export function docSummaryBefore(rawText: string, offset: number): string | null {
+  const text = rawText.charCodeAt(0) === BOM ? rawText.slice(1) : rawText;
+  const lines = text.slice(0, offset).split('\n');
+  lines.pop(); // the declaration's own line, up to the name
+  const doc: string[] = [];
+  let brackets = 0;
+  while (lines.length > 0) {
+    const line = (lines.pop() ?? '').trim();
+    if (line.startsWith('///')) {
+      if (brackets > 0) break;
+      doc.unshift(line.slice(3));
+      continue;
+    }
+    if (doc.length > 0) break;
+    brackets += count(line, ']') - count(line, '[');
+    // An attribute line, part of one, or a plain comment or directive among them.
+    if (brackets > 0 || line.startsWith('[') || line.startsWith('//') || line.startsWith('#')) continue;
+    break;
+  }
+  if (doc.length === 0) return null;
+
+  const xml = doc.join('\n');
+  const summary = /<summary>([\s\S]*?)<\/summary>/.exec(xml)?.[1] ?? (/<\w/.test(xml) ? '' : xml);
+  const plain = summary
+    .replace(/<see(?:also)?\s+(?:cref|href)="(?:\w:)?([^"]*)"\s*\/>/g, (_, ref: string) => shortRef(ref))
+    .replace(/<(?:see|paramref|typeparamref)\s+(?:langword|name)="([^"]*)"\s*\/>/g, '$1')
+    // Block tags part words; inline ones (`<c>`, `<b>`) wrap them.
+    .replace(/<\/?(?:para|br|list|item|description|term)\b[^>]*>/g, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return plain || null;
+}
+
+/** A `cref` as its short name: `Content.Shared.Foo.BarComponent` -> `BarComponent`, `M:A.B.Run(int)` -> `Run`. */
+function shortRef(ref: string): string {
+  const bare = ref.replace(/[({].*$/, '').replace(/`\d+/g, '');
+  return bare.slice(bare.lastIndexOf('.') + 1);
 }
 
 function lineEnd(text: string, from: number): number {

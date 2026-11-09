@@ -18,6 +18,7 @@
  * know — has no hover.
  */
 
+import type { ClassLocator } from './class-location';
 import { contextAt, fieldAt } from './completion';
 import { classAt, idSpanAt } from './definition';
 import { parsePrototypeFile } from './prototype-yaml';
@@ -52,6 +53,10 @@ export interface FieldHover {
   readonly default: string | null;
   /** A `[DataField(required: true)]` field. */
   readonly required: boolean;
+  /** The C# member behind the tag — what its declaration is looked up by. */
+  readonly member: string;
+  /** Full C# name of the class declaring the member; `null` in a schema too old to say. */
+  readonly declaringType: string | null;
 }
 
 /** The hover for `offset` in `text`, or `null` when the caret names nothing the schema documents. */
@@ -82,7 +87,34 @@ export function hoverAt(text: string, offset: number, schema: SchemaRoot): Hover
     summary: summaryOf(field),
     default: defaultOf(field),
     required: field.required,
+    member: field.name,
+    declaringType: field.declaringType ?? null,
   };
+}
+
+/**
+ * `hover` with its summary read from the `///` comment in source when the
+ * schema has none — forks rarely build XML docs, so it seldom does. A lookup
+ * slower than `timeoutMs` (a first full scan of the sources) is not waited for:
+ * the hover shows without it, and the locator keeps what it read for next time.
+ */
+export async function withSourceSummary(
+  hover: HoverContent,
+  locator: ClassLocator,
+  timeoutMs: number,
+): Promise<HoverContent> {
+  if (hover.summary !== null) return hover;
+  const lookup: Promise<string | null> =
+    hover.kind !== 'field'
+      ? locator.classSummary(hover.type)
+      : hover.declaringType === null
+        ? Promise.resolve(null)
+        : locator.memberSummary(hover.declaringType, hover.member);
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), timeoutMs)));
+  const summary = await Promise.race([lookup.catch(() => null), timeout]).finally(() => clearTimeout(timer));
+  return summary ? { ...hover, summary } : hover;
 }
 
 /** A summary, with the empty one the CLI may write read as none. */
